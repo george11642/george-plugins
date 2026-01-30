@@ -1,0 +1,91 @@
+{
+  "project": "${project_name}",
+  "generated_at": "${timestamp}",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "title": "Write introductory blog post",
+      "description": "Create a compelling introductory blog post explaining what ${project_name} does and why it matters",
+      "content_type": "blog",
+      "priority": 1,
+      "acceptance_criteria": [
+        "800+ words",
+        "Includes meta description under 160 chars",
+        "Matches brand voice from config",
+        "Has clear CTA",
+        "SEO optimized title"
+      ],
+      "passes": false
+    },
+    {
+      "id": "STORY-002",
+      "title": "Write 3 topic-focused blog posts",
+      "description": "Create 3 blog posts, one for each of the top 3 topics in config.content.topics",
+      "content_type": "blog",
+      "priority": 2,
+      "acceptance_criteria": [
+        "Each post 800+ words",
+        "Each covers a different topic from config",
+        "Internal links between posts",
+        "Meta descriptions for all"
+      ],
+      "passes": false
+    },
+    {
+      "id": "STORY-003",
+      "title": "Write a case study",
+      "description": "Create a case study or success story related to ${project_name}'s use case",
+      "content_type": "case_study",
+      "priority": 3,
+      "acceptance_criteria": [
+        "1200+ words",
+        "Includes data points or metrics",
+        "Before/after narrative",
+        "Actionable takeaways"
+      ],
+      "passes": false
+    },
+    {
+      "id": "STORY-004",
+      "title": "Create social media content pack",
+      "description": "Write 5 social media posts promoting ${project_name} across different angles",
+      "content_type": "social",
+      "priority": 4,
+      "acceptance_criteria": [
+        "5 unique posts",
+        "Each 100+ characters",
+        "Mix of educational, promotional, and engagement posts",
+        "Include relevant hashtags"
+      ],
+      "passes": false
+    },
+    {
+      "id": "STORY-005",
+      "title": "Publish all blog content",
+      "description": "Publish all completed blog posts and case studies to configured platforms",
+      "content_type": "publish",
+      "priority": 5,
+      "acceptance_criteria": [
+        "All blog posts published to primary platform",
+        "Cross-posted to configured platforms",
+        "Canonical URLs set correctly",
+        "Published status updated in PRD"
+      ],
+      "passes": false
+    },
+    {
+      "id": "STORY-006",
+      "title": "Write SEO-focused content for top keywords",
+      "description": "Create 2 SEO-focused articles targeting high-value keywords in the ${project_name} niche",
+      "content_type": "blog",
+      "priority": 6,
+      "acceptance_criteria": [
+        "Each 1000+ words",
+        "Primary keyword in title, H2s, and first paragraph",
+        "Natural keyword density",
+        "FAQ section for featured snippets"
+      ],
+      "passes": false
+    }
+  ]
+}

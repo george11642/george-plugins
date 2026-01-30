@@ -1,0 +1,3 @@
+# Ralph Marketer Progress Log
+# Format: [date] [STORY-ID] - [description] - [status]
+# ─────────────────────────────────────────────────────

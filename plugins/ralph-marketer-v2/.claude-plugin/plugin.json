@@ -1,0 +1,9 @@
+{
+  "name": "ralph-marketer-v2",
+  "description": "Autonomous AI content marketer. Auto-detects your stack, creates and publishes content while you sleep.",
+  "version": "2.0.0",
+  "author": {
+    "name": "George Teifel",
+    "email": "george.teifel@gmail.com"
+  }
+}

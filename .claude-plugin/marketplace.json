@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "george-local",
+  "description": "George's local Claude Code plugins",
+  "owner": {
+    "name": "George Teifel",
+    "email": "george.teifel@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "ralph-marketer-v2",
+      "description": "Autonomous content marketing plugin. Auto-detects tech stack, runs headless content loops, manages SQLite pipeline, publishes to Supabase/Medium/Dev.to/markdown/MDX. Includes copywriter skill with 7-phase quality loop.",
+      "version": "2.0.0",
+      "author": {
+        "name": "George Teifel",
+        "email": "george.teifel@gmail.com"
+      },
+      "source": "./plugins/ralph-marketer-v2",
+      "category": "marketing"
+    }
+  ]
+}
