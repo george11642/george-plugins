@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "george-local",
-  "description": "George's local Claude Code plugins",
+  "name": "george-plugins",
+  "description": "George's Claude Code plugins",
   "owner": {
     "name": "George Teifel",
     "email": "george.teifel@gmail.com"
