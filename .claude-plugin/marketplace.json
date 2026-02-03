@@ -17,6 +17,17 @@
       },
       "source": "./plugins/ralph-marketer-v2",
       "category": "marketing"
+    },
+    {
+      "name": "ralph-gsd",
+      "description": "Autonomous milestone execution orchestrator. Combines Ralph loop technique with GSD workflow to execute entire milestones without manual intervention.",
+      "version": "1.0.0",
+      "author": {
+        "name": "George Teifel",
+        "email": "george.teifel@gmail.com"
+      },
+      "source": "./plugins/ralph-gsd",
+      "category": "automation"
     }
   ]
 }
