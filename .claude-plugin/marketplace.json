@@ -20,8 +20,8 @@
     },
     {
       "name": "ralph-gsd",
-      "description": "Autonomous milestone execution orchestrator. Combines Ralph loop technique with GSD workflow to execute entire milestones without manual intervention.",
-      "version": "1.0.0",
+      "description": "Autonomous milestone execution orchestrator with parallel phase execution. Parses dependency graphs from ROADMAP.md and dispatches independent phases concurrently.",
+      "version": "2.0.0",
       "author": {
         "name": "George Teifel",
         "email": "george.teifel@gmail.com"

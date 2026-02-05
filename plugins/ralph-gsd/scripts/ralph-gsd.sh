@@ -12,6 +12,7 @@
 #   --project-dir PATH    Project directory with .planning/ (required)
 #   --max-iterations N    Safety limit (default: 100)
 #   --skip-discuss        Auto-skip discuss phase with defaults
+#   --max-parallel N      Max concurrent Claude sessions (default: 4)
 #   --dry-run             Show what would happen without executing
 #   --help                Show this help message
 #
@@ -24,7 +25,7 @@ set -euo pipefail
 # Configuration
 #=============================================================================
 
-VERSION="1.1.0"
+VERSION="2.0.0"
 DEFAULT_MAX_ITERATIONS=100
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE=""
@@ -33,6 +34,14 @@ MAX_ITERATIONS=$DEFAULT_MAX_ITERATIONS
 SKIP_DISCUSS=false
 DRY_RUN=false
 ITERATION=0
+
+# Parallel execution globals
+declare -A PHASE_DEPS          # phase → space-separated dependency phase numbers
+declare -A PHASE_STUCK_COUNT   # per-phase stuck detection counter
+declare -A PHASE_LAST_ACTION   # per-phase last action tracking
+declare -A PHASE_SKIPPED       # phases marked as stuck/skipped
+PARALLEL_LOG_DIR=""
+MAX_PARALLEL=4                 # max concurrent claude sessions
 
 #=============================================================================
 # Colors and Output
@@ -87,6 +96,7 @@ REQUIRED:
 OPTIONS:
     --max-iterations N    Maximum iterations before stopping (default: 100)
     --skip-discuss        Auto-skip discuss phase using sensible defaults
+    --max-parallel N      Maximum concurrent Claude sessions (default: 4)
     --dry-run             Show planned actions without executing
     --help                Show this help message
     --version             Show version information
@@ -105,6 +115,12 @@ DESCRIPTION:
     - checkpoint:human-verify → Logged to DEFERRED.md, continues
     - checkpoint:decision → Makes sensible default choice, continues
     - checkpoint:human-action → Logged and skipped, continues
+
+    Parallel Execution:
+    - Parses phase dependencies from ROADMAP.md
+    - Executes independent phases in parallel (up to --max-parallel)
+    - Sequential execution when only one phase is ready
+    - Per-phase stuck detection with graceful continuation
 
 WORKFLOW:
     1. Create milestone: claude > /gsd:new-project "My Feature"
@@ -126,6 +142,9 @@ EXAMPLES:
 
     # Preview what would happen
     ralph-gsd.sh --project-dir . --dry-run
+
+    # Run with 8 parallel sessions
+    ralph-gsd.sh --project-dir . --max-parallel 8
 
 EOF
 }
@@ -152,6 +171,10 @@ parse_args() {
             --skip-discuss)
                 SKIP_DISCUSS=true
                 shift
+                ;;
+            --max-parallel)
+                MAX_PARALLEL="$2"
+                shift 2
                 ;;
             --dry-run)
                 DRY_RUN=true
@@ -510,6 +533,222 @@ log_deferred() {
 }
 
 #=============================================================================
+# Dependency Parsing and Parallel Execution
+#=============================================================================
+
+# Parse all phase dependencies from ROADMAP.md
+parse_all_dependencies() {
+    local roadmap="$PROJECT_DIR/.planning/ROADMAP.md"
+
+    if [[ ! -f "$roadmap" ]]; then
+        log_error "ROADMAP.md not found"
+        return 1
+    fi
+
+    log_info "Parsing phase dependencies from ROADMAP.md"
+
+    local current_phase=""
+    while IFS= read -r line; do
+        # Detect phase headers (## Phase NN or ### Phase NN)
+        if [[ "$line" =~ ^##+[[:space:]]*Phase[[:space:]]+([0-9]+) ]]; then
+            current_phase="${BASH_REMATCH[1]}"
+            # Initialize with empty deps
+            PHASE_DEPS["$current_phase"]=""
+        fi
+
+        # Look for dependency lines: **Depends on**: Phase 18 (v2.0 complete)
+        if [[ -n "$current_phase" ]] && [[ "$line" =~ \*\*Depends[[:space:]]+on\*\*:[[:space:]]*(.*) ]]; then
+            local deps_line="${BASH_REMATCH[1]}"
+            # Extract all "Phase N" references
+            local deps=""
+            while [[ "$deps_line" =~ Phase[[:space:]]+([0-9]+) ]]; do
+                deps="$deps ${BASH_REMATCH[1]}"
+                deps_line="${deps_line#*Phase ${BASH_REMATCH[1]}}"
+            done
+            # Trim leading space
+            deps="${deps# }"
+            PHASE_DEPS["$current_phase"]="$deps"
+            if [[ -n "$deps" ]]; then
+                log_info "Phase $current_phase depends on: $deps"
+            fi
+        fi
+    done < "$roadmap"
+
+    log_success "Dependency parsing complete"
+    return 0
+}
+
+# Get dependencies for a specific phase
+get_phase_dependencies() {
+    local phase=$1
+    echo "${PHASE_DEPS[$phase]:-}"
+}
+
+# Check if all dependencies for a phase are met (verified)
+are_dependencies_met() {
+    local phase=$1
+    local deps
+    deps=$(get_phase_dependencies "$phase")
+
+    if [[ -z "$deps" ]]; then
+        # No dependencies - always ready
+        return 0
+    fi
+
+    for dep in $deps; do
+        local dep_status
+        dep_status=$(get_phase_status "$dep")
+        if [[ "$dep_status" != "verified" ]]; then
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# Get all phases that are ready to execute (dependencies met, not verified)
+# Returns: space-separated phase numbers, "COMPLETE", or "DEADLOCK"
+get_ready_phases() {
+    local phases
+    phases=$(get_phases) || {
+        echo "ERROR"
+        return 0
+    }
+
+    local ready_phases=""
+    local all_verified=true
+    local has_unverified=false
+
+    for phase in $phases; do
+        local status
+        status=$(get_phase_status "$phase")
+
+        if [[ "$status" == "verified" ]]; then
+            continue
+        fi
+
+        has_unverified=true
+        all_verified=false
+
+        # Skip phases that have been marked as stuck
+        if [[ -n "${PHASE_SKIPPED[$phase]:-}" ]]; then
+            continue
+        fi
+
+        if are_dependencies_met "$phase"; then
+            ready_phases="$ready_phases $phase"
+        fi
+    done
+
+    # Trim leading space
+    ready_phases="${ready_phases# }"
+
+    if [[ "$all_verified" == true ]]; then
+        echo "COMPLETE"
+        return 0
+    fi
+
+    if [[ -z "$ready_phases" ]] && [[ "$has_unverified" == true ]]; then
+        echo "DEADLOCK"
+        return 0
+    fi
+
+    echo "$ready_phases"
+}
+
+# Per-phase stuck detection
+is_phase_stuck() {
+    local phase=$1
+    local action=$2
+    local last_action="${PHASE_LAST_ACTION[$phase]:-}"
+    local stuck_count="${PHASE_STUCK_COUNT[$phase]:-0}"
+
+    if [[ "$action" == "$last_action" ]]; then
+        stuck_count=$((stuck_count + 1))
+        PHASE_STUCK_COUNT["$phase"]=$stuck_count
+        if [[ $stuck_count -ge 3 ]]; then
+            return 0  # Is stuck
+        fi
+    else
+        PHASE_STUCK_COUNT["$phase"]=1
+        PHASE_LAST_ACTION["$phase"]="$action"
+    fi
+
+    return 1  # Not stuck
+}
+
+# Run GSD command in parallel mode (output to log file only)
+run_gsd_command_parallel() {
+    local gsd_command=$1
+    local phase=$2
+    local logfile=$3
+    local prompt
+    prompt=$(build_prompt "$gsd_command")
+
+    echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') Starting /gsd:$gsd_command for phase $phase" >> "$logfile"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') [DRY RUN] Would execute: claude -p '...' --allowedTools '*'" >> "$logfile"
+        echo "RALPH_STATUS: COMMAND_COMPLETE" >> "$logfile"
+        return 0
+    fi
+
+    cd "$PROJECT_DIR"
+
+    if claude -p "$prompt" \
+        --dangerously-skip-permissions \
+        --verbose \
+        --output-format stream-json \
+        --allowedTools '*' >> "$logfile" 2>&1; then
+        echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') Command completed: /gsd:$gsd_command" >> "$logfile"
+        return 0
+    else
+        local exit_code=$?
+        echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') Command failed: /gsd:$gsd_command" >> "$logfile"
+        return $exit_code
+    fi
+}
+
+# Merge parallel phase logs into main log and extract deferred items
+merge_phase_logs() {
+    if [[ ! -d "$PARALLEL_LOG_DIR" ]]; then
+        return 0
+    fi
+
+    for logfile in "$PARALLEL_LOG_DIR"/*.log; do
+        if [[ ! -f "$logfile" ]]; then
+            continue
+        fi
+
+        local phase_num
+        phase_num=$(basename "$logfile" .log | sed 's/phase-//')
+
+        log_info "=== Output from Phase $phase_num ==="
+
+        # Append to main log
+        cat "$logfile" >> "$LOG_FILE"
+
+        # Extract deferred items
+        if grep -qi "checkpoint:human-verify\|needs.*verification\|verify.*manually" "$logfile"; then
+            log_deferred "Visual verification needed" "$phase_num"
+        fi
+
+        if grep -qi "checkpoint:human-action\|manual.*action\|human.*required" "$logfile"; then
+            local action_desc
+            action_desc=$(grep -oP '(?<=checkpoint:human-action[:\s])[^"]*' "$logfile" 2>/dev/null | head -1 || echo "Manual action")
+            log_deferred "Manual action: $action_desc" "$phase_num"
+        fi
+
+        # Check completion status
+        if grep -q "RALPH_STATUS: COMMAND_COMPLETE" "$logfile"; then
+            log_success "Phase $phase_num completed"
+        elif grep -q "RALPH_STATUS: ERROR" "$logfile"; then
+            log_error "Phase $phase_num failed"
+        fi
+    done
+}
+
+#=============================================================================
 # Claude Invocation
 #=============================================================================
 
@@ -621,88 +860,153 @@ parse_claude_output() {
 #=============================================================================
 
 main_loop() {
-    log_info "Starting Ralph-GSD orchestrator"
+    log_info "Starting Ralph-GSD orchestrator v$VERSION"
     log_info "Project: $PROJECT_DIR"
     log_info "Max iterations: $MAX_ITERATIONS"
+    log_info "Max parallel: $MAX_PARALLEL"
     log_info "Skip discuss: $SKIP_DISCUSS"
     log_info "Dry run: $DRY_RUN"
 
     init_deferred
 
+    # Parse phase dependencies once at startup
+    parse_all_dependencies || {
+        log_error "Failed to parse dependencies"
+        return 1
+    }
+
+    # Create parallel log directory
+    PARALLEL_LOG_DIR="$PROJECT_DIR/.planning/ralph-gsd-parallel"
+    mkdir -p "$PARALLEL_LOG_DIR"
+
     ITERATION=0
-    local last_action=""
-    local repeat_count=0
-    local MAX_REPEAT=3
 
     while [[ $ITERATION -lt $MAX_ITERATIONS ]]; do
         ITERATION=$((ITERATION + 1))
 
         log_info "=== Iteration $ITERATION of $MAX_ITERATIONS ==="
 
-        # Check if milestone is complete
-        if is_milestone_complete; then
-            log_success "Milestone complete!"
-            break
-        fi
+        # Get all ready phases
+        local ready_phases
+        ready_phases=$(get_ready_phases)
 
-        # Get current phase and status
-        local current_phase
-        current_phase=$(get_current_phase)
-
-        if [[ "$current_phase" == "COMPLETE" ]]; then
+        if [[ "$ready_phases" == "COMPLETE" ]]; then
             log_success "All phases complete!"
             break
         fi
 
-        if [[ "$current_phase" == "ERROR" ]]; then
+        if [[ "$ready_phases" == "DEADLOCK" ]]; then
+            log_error "Deadlock detected: phases remaining but none have dependencies met"
+            log_error "Manual intervention required"
+            break
+        fi
+
+        if [[ "$ready_phases" == "ERROR" ]]; then
             log_error "No phases found in ROADMAP.md"
             break
         fi
 
-        local status
-        status=$(get_phase_status "$current_phase")
+        # Convert to array
+        local -a ready_array=($ready_phases)
+        local ready_count=${#ready_array[@]}
 
-        log_phase "Phase $current_phase - Status: $status"
+        log_info "Ready phases: $ready_count (${ready_phases})"
 
-        # Determine next action
-        local action
-        action=$(determine_next_action "$current_phase")
+        # Sequential execution for single phase
+        if [[ $ready_count -eq 1 ]]; then
+            local phase="${ready_array[0]}"
+            local status
+            status=$(get_phase_status "$phase")
 
-        if [[ "$action" == "NEXT_PHASE" ]]; then
-            log_info "Phase $current_phase verified, moving to next phase"
-            last_action=""
-            repeat_count=0
-            continue
-        fi
+            log_phase "Phase $phase - Status: $status"
 
-        if [[ "$action" == "ERROR" ]]; then
-            log_error "Could not determine action for phase $current_phase"
-            break
-        fi
+            # Determine next action
+            local action
+            action=$(determine_next_action "$phase")
 
-        # Stuck detection: break if the same action repeats without progress
-        if [[ "$action" == "$last_action" ]]; then
-            repeat_count=$((repeat_count + 1))
-            if [[ $repeat_count -ge $MAX_REPEAT ]]; then
-                log_error "Stuck: '$action' repeated $MAX_REPEAT times without status change"
-                log_error "Phase $current_phase status remains '$status' - manual intervention needed"
+            if [[ "$action" == "NEXT_PHASE" ]]; then
+                log_info "Phase $phase verified, moving to next phase"
+                continue
+            fi
+
+            if [[ "$action" == "ERROR" ]]; then
+                log_error "Could not determine action for phase $phase"
                 break
             fi
-            log_warn "Repeat $repeat_count/$MAX_REPEAT for action: $action"
+
+            # Per-phase stuck detection
+            if is_phase_stuck "$phase" "$action"; then
+                log_error "Phase $phase stuck: '$action' repeated 3 times without status change"
+                log_deferred "Phase $phase stuck on $action" "$phase"
+                PHASE_SKIPPED["$phase"]=1
+                continue  # Skip this phase, continue with others
+            fi
+
+            log_info "Action: /gsd:$action"
+
+            # Run the GSD command with terminal output
+            if ! run_gsd_command "$action"; then
+                log_error "Command failed for phase $phase"
+                # Don't break - continue with other phases
+            fi
+
+        # Parallel execution for multiple phases
         else
-            repeat_count=1
-            last_action="$action"
+            # Cap at MAX_PARALLEL
+            local phases_to_run=("${ready_array[@]:0:$MAX_PARALLEL}")
+            local -a pids=()
+            local -a phase_actions=()
+
+            log_info "Executing ${#phases_to_run[@]} phases in parallel"
+
+            # Clean up old logs
+            rm -f "$PARALLEL_LOG_DIR"/*.log
+
+            # Dispatch parallel jobs
+            for phase in "${phases_to_run[@]}"; do
+                local action
+                action=$(determine_next_action "$phase")
+
+                if [[ "$action" == "NEXT_PHASE" ]] || [[ "$action" == "ERROR" ]]; then
+                    continue
+                fi
+
+                # Per-phase stuck detection
+                if is_phase_stuck "$phase" "$action"; then
+                    log_warn "Phase $phase stuck: '$action' repeated 3 times - skipping"
+                    log_deferred "Phase $phase stuck on $action" "$phase"
+                    PHASE_SKIPPED["$phase"]=1
+                    continue
+                fi
+
+                local logfile="$PARALLEL_LOG_DIR/phase-$phase.log"
+                log_info "Starting phase $phase in background: /gsd:$action"
+
+                # Run in background
+                run_gsd_command_parallel "$action" "$phase" "$logfile" &
+                pids+=($!)
+                phase_actions+=("$phase:$action")
+            done
+
+            # Wait for all parallel jobs
+            if [[ ${#pids[@]} -gt 0 ]]; then
+                log_info "Waiting for ${#pids[@]} parallel jobs to complete"
+                for pid in "${pids[@]}"; do
+                    wait "$pid" || log_warn "Job $pid exited with error"
+                done
+                log_success "All parallel jobs completed"
+
+                # Merge logs and extract deferred items
+                merge_phase_logs
+
+                # Clean up log directory
+                rm -rf "$PARALLEL_LOG_DIR"/*.log
+            else
+                log_warn "No phases dispatched in this iteration"
+            fi
         fi
 
-        log_info "Action: /gsd:$action"
-
-        # Run the GSD command
-        if ! run_gsd_command "$action"; then
-            log_error "Command failed, stopping"
-            break
-        fi
-
-        # Small delay between iterations to avoid hammering
+        # Small delay between iterations
         sleep 1
     done
 
@@ -716,9 +1020,11 @@ main_loop() {
     else
         local current_phase
         current_phase=$(get_current_phase)
-        local status
-        status=$(get_phase_status "$current_phase")
-        log_warn "Stopped at phase $current_phase (status: $status)"
+        if [[ "$current_phase" != "COMPLETE" ]] && [[ "$current_phase" != "ERROR" ]]; then
+            local status
+            status=$(get_phase_status "$current_phase")
+            log_warn "Stopped at phase $current_phase (status: $status)"
+        fi
     fi
 
     # Show deferred items
@@ -733,6 +1039,9 @@ main_loop() {
     fi
 
     log_info "Log file: $LOG_FILE"
+
+    # Clean up parallel log directory
+    rm -rf "$PARALLEL_LOG_DIR"
 }
 
 #=============================================================================
