@@ -8,6 +8,17 @@
   },
   "plugins": [
     {
+      "name": "george-setup",
+      "description": "Complete Claude Code power-user setup: T0-T4 orchestration engine, context-aware hooks, MCP server sources, and one-command installer.",
+      "version": "1.0.0",
+      "author": {
+        "name": "George Teifel",
+        "email": "george.teifel@gmail.com"
+      },
+      "source": "./plugins/george-setup",
+      "category": "productivity"
+    },
+    {
       "name": "ralph-marketer-v2",
       "description": "Autonomous content marketing plugin. Auto-detects tech stack, runs headless content loops, manages SQLite pipeline, publishes to Supabase/Medium/Dev.to/markdown/MDX. Includes copywriter skill with 7-phase quality loop.",
       "version": "2.0.0",

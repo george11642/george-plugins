@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "latex-server": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "YOUR_PATH\\mcp-latex-server",
+        "run",
+        "latex_server.py"
+      ],
+      "cwd": "YOUR_PATH\\mcp-latex-server"
+    }
+  }
+}
