@@ -1,0 +1,20 @@
+{
+  "name": "autopilot",
+  "description": "Fully autonomous overnight coding agent. Give it a mission, walk away for hours, come back to a better codebase. Supports mission-driven development, codebase improvement, plan execution, and deep research modes. Fresh-context loop pattern with file-based memory for unlimited runtime.",
+  "version": "1.0.0",
+  "author": {
+    "name": "George Teifel",
+    "email": "george.teifel@gmail.com"
+  },
+  "repository": "https://github.com/george11642/george-plugins",
+  "license": "MIT",
+  "keywords": [
+    "autonomous",
+    "overnight",
+    "ralph",
+    "loop",
+    "agentic",
+    "self-improving",
+    "autopilot"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "description": "Autopilot hooks for autonomous operation and context management",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f .autopilot/mission.json ] && grep -q '\"active\"' .autopilot/mission.json 2>/dev/null; then echo '## Autopilot Session Active'; echo ''; cat .autopilot/handoff.md 2>/dev/null || echo 'No handoff notes.'; echo ''; echo '---'; echo 'Progress:'; grep -o '\"status\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' .autopilot/progress.json 2>/dev/null | sort | uniq -c || echo 'No progress data.'; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
