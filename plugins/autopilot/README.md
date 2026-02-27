@@ -52,19 +52,47 @@ Deep research mode — produces a comprehensive report.
 /autopilot --mode research "How to implement real-time WebSocket subscriptions with Convex"
 ```
 
+### Evolve (NEW)
+The crown jewel. No goal needed — Autopilot analyzes the codebase, generates a prioritized list of product-level milestones, executes each one via the full GSD pipeline, and re-evaluates after each completion. Run overnight and come back to a meaningfully better codebase.
+
+```bash
+# Run overnight — let the strategist decide everything
+/autopilot --mode evolve --hours 12
+
+# Cap at 3 milestones
+/autopilot --mode evolve --milestones 3 --hours 8
+
+# Focus on specific areas
+/autopilot --mode evolve --focus "testing,security" --hours 6
+
+# Preview what would happen
+/autopilot --mode evolve --dry-run
+```
+
+The evolve loop:
+1. **Strategist** analyzes codebase health across 9 dimensions (tests, errors, types, security, performance, observability, DX, architecture, features)
+2. **Generates 5-10 milestones** — concrete, achievable, ranked by impact
+3. **Executes each milestone** via `/gsd:new-milestone` + full GSD phase loop (discuss → plan → execute → verify)
+4. **Re-evaluates** after each milestone completes (codebase changed — priorities shift)
+5. Repeats until time limit, milestone cap, or no more improvements found
+
 ## Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mode` | `mission` | `mission`, `improve`, `execute`, `research` |
+| `--mode` | `mission` | `mission`, `improve`, `execute`, `research`, `evolve` |
 | `--hours` | `8` | Maximum runtime in hours |
 | `--max-iterations` | `50` | Safety cap on loop iterations |
 | `--parallel` | `3` | Max parallel subagents per iteration |
+| `--milestones` | unlimited | Max milestones to complete (evolve mode) |
+| `--focus` | all areas | Comma-separated focus areas (evolve mode) |
 | `--scope` | all | Comma-separated directories to focus on |
 | `--plan` | — | Plan file path (required for execute mode) |
 | `--dry-run` | — | Preview without executing |
 
 ## Architecture
+
+### Standard Modes (mission/improve/execute/research)
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -91,18 +119,44 @@ Deep research mode — produces a comprehensive report.
 │  6. Update  → Write progress.json + handoff.md   │
 │  7. Signal  → AUTOPILOT_STATUS: COMPLETE         │
 └──────────────────────────────────────────────────┘
-         │ writes state to disk
+```
+
+### Evolve Mode (nested loop)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              evolve_main_loop (outer)                    │
+│                                                         │
+│  while milestones remain && time left:                  │
+│    ┌──────────────────────────────────────────────┐    │
+│    │  Strategist Claude Instance                   │    │
+│    │  Analyzes codebase → writes milestones.json  │    │
+│    └──────────────────────────────────────────────┘    │
+│    pick next milestone                                   │
+│    ┌──────────────────────────────────────────────┐    │
+│    │  Setup Claude Instance                        │    │
+│    │  Runs /gsd:new-milestone → .planning/         │    │
+│    └──────────────────────────────────────────────┘    │
+│    ┌──────────────────────────────────────────────┐    │
+│    │  gsd_main_loop (inner)                        │    │
+│    │  Executes phases: discuss→plan→execute→verify │    │
+│    └──────────────────────────────────────────────┘    │
+│    mark milestone complete                               │
+│    re-run Strategist (codebase changed!)                 │
+│  done                                                   │
+└─────────────────────────────────────────────────────────┘
+         │ all state on disk
          ▼
 ┌──────────────────────────────────────────────────┐
 │              .autopilot/ (File State)             │
 │                                                   │
-│  mission.json   — The user's goal (immutable)    │
-│  progress.json  — Task list + completion status   │
-│  handoff.md     — Context for next iteration     │
-│  log.md         — Append-only activity log       │
-│  loop.log       — Raw bash loop output           │
-│  loop.pid       — Process ID for stop/status     │
-│  iterations/    — Per-iteration Claude output     │
+│  mission.json      — The user's goal (immutable) │
+│  milestones.json   — Milestone list + status     │  ← evolve only
+│  progress.json     — Task list + completion      │
+│  handoff.md        — Cross-iteration context     │
+│  loop.log          — Raw bash loop output        │
+│  loop.pid          — Process ID                  │
+│  iterations/       — Per-iteration output logs   │
 └──────────────────────────────────────────────────┘
 ```
 

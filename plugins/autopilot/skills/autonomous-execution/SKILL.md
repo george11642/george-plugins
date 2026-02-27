@@ -60,6 +60,70 @@ Update `.autopilot/handoff.md` with:
 ### 7. SIGNAL
 Output: `AUTOPILOT_STATUS: ITERATION_COMPLETE`
 
+## Evolve Mode — Multi-Milestone Autonomous Loop
+
+Evolve mode is a nested loop: outer = milestones, inner = GSD phases per milestone.
+
+### The Evolve Loop
+
+```
+while not done:
+  if no pending milestones:
+    run Strategist → generates/refreshes milestones.json
+  pick next pending milestone
+  run /gsd:new-milestone → sets up .planning/ structure
+  run gsd_main_loop → executes all phases (discuss→plan→execute→verify)
+  mark milestone complete
+  run Strategist again → re-evaluates priorities (codebase changed!)
+  repeat
+```
+
+### Evolve State Files
+
+| File | Purpose |
+|------|---------|
+| `.autopilot/milestones.json` | Milestone list with status, gsdProject path, timestamps |
+| `.autopilot/handoff.md` | Accumulates strategist analysis + per-iteration notes |
+| `.autopilot/iterations/strategist-N.log` | Strategist agent output per run |
+| `.autopilot/iterations/milestone-setup-N.log` | GSD new-milestone setup per milestone |
+
+### Milestone Lifecycle
+
+```
+pending → active → completed
+                 ↘ skipped (if stuck)
+```
+
+The Strategist agent writes milestones.json. The loop reads it. The loop updates statuses. The Strategist re-reads it on re-evaluation to avoid duplicates.
+
+### Handoff in Evolve Mode
+
+Because milestones span many iterations, handoff.md carries **milestone-level** context:
+- Strategist analysis summary (health scores, key findings)
+- Which milestone is active and what phase it's on
+- Any cross-milestone learnings (e.g., "this codebase uses X pattern everywhere")
+
+### The Strategist Agent
+
+The Strategist is a separate Claude instance that:
+1. Reads the codebase holistically (CLAUDE.md, README, git log, source structure)
+2. Scores codebase health across 9 dimensions (1-5)
+3. Generates concrete, achievable milestones ranked by impact
+4. Re-evaluates after each milestone (codebase changed — reprioritize)
+5. Writes results to `.autopilot/milestones.json`
+
+Good milestones are concrete ("Add Zod validation to all API route inputs with error response formatting") not vague ("improve validation").
+
+### Why Re-Evaluate After Each Milestone?
+
+When a milestone completes:
+- Test coverage may now be sufficient → skip a "add tests" milestone
+- A refactor may have fixed issues flagged for other milestones
+- New technical debt may have been introduced
+- The priority order almost certainly changed
+
+Skipping re-evaluation means executing a stale plan. The strategist is cheap compared to the execution time.
+
 ## Anti-Patterns to Avoid
 
 - **Multi-tasking**: Doing 3 tasks in one iteration. You'll rush and make mistakes.

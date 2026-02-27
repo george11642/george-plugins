@@ -20,7 +20,7 @@ set -euo pipefail
 # Configuration
 #=============================================================================
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR=""
 MAX_ITERATIONS=50
@@ -33,6 +33,10 @@ ITERATION=0
 START_TIME=""
 AUTOPILOT_DIR=""
 LOG_FILE=""
+
+# Evolve mode options
+MAX_MILESTONES=0       # 0 = unlimited
+EVOLVE_FOCUS=""        # comma-separated focus areas
 
 # GSD execute mode state
 declare -A GSD_PHASE_DEPS
@@ -72,6 +76,8 @@ parse_args() {
             --skip-discuss)  SKIP_DISCUSS=true; shift ;;
             --resume)        RESUME=true; shift ;;
             --dry-run)       DRY_RUN=true; shift ;;
+            --milestones)    MAX_MILESTONES="$2"; shift 2 ;;
+            --focus)         EVOLVE_FOCUS="$2"; shift 2 ;;
             --help)          show_help; exit 0 ;;
             *)               log_error "Unknown option: $1"; exit 1 ;;
         esac
@@ -99,9 +105,20 @@ OPTIONS:
     --max-iterations N     Max iterations before stopping (default: 50)
     --hours N              Max runtime in hours (default: 8)
     --parallel N           Max parallel subagents per iteration (default: 3)
+    --milestones N         Max milestones to complete in evolve mode (default: unlimited)
+    --focus AREAS          Comma-separated focus areas for evolve strategist
+                           e.g., "testing,security" or "performance,reliability"
     --resume               Resume from existing progress state
     --dry-run              Show what would happen without executing
     --help                 Show this help
+
+MODES (set in .autopilot/mission.json):
+    mission    Default task-based loop
+    improve    Codebase health scan and fix
+    execute    GSD phase execution (requires .planning/)
+    research   Deep research mode
+    evolve     Autonomous milestone generation and execution (NEW)
+               Analyzes codebase → generates milestones → executes each via GSD → repeats
 EOF
 }
 
@@ -457,6 +474,249 @@ run_gsd_iteration() {
 }
 
 #=============================================================================
+# Evolve Mode — Milestone State Management
+#=============================================================================
+
+MILESTONES_FILE=""
+
+evolve_init_state() {
+    MILESTONES_FILE="$AUTOPILOT_DIR/milestones.json"
+    if [[ ! -f "$MILESTONES_FILE" ]]; then
+        cat > "$MILESTONES_FILE" << 'EOF'
+{
+  "milestones": [],
+  "currentMilestone": null,
+  "completedCount": 0,
+  "generatedAt": null,
+  "strategy": null
+}
+EOF
+        log_info "Initialized milestones.json"
+    fi
+}
+
+evolve_get_completed_count() {
+    grep -c '"status"[[:space:]]*:[[:space:]]*"completed"' "$MILESTONES_FILE" 2>/dev/null || echo "0"
+}
+
+evolve_get_pending_count() {
+    grep -c '"status"[[:space:]]*:[[:space:]]*"pending"' "$MILESTONES_FILE" 2>/dev/null || echo "0"
+}
+
+evolve_has_milestones() {
+    local pending
+    pending=$(evolve_get_pending_count)
+    [[ "$pending" -gt 0 ]]
+}
+
+evolve_should_stop() {
+    [[ -f "$AUTOPILOT_DIR/STOP" ]] && { log_info "Stop signal detected"; return 0; }
+    local status; status=$(get_status)
+    [[ "$status" == "complete" || "$status" == "stopped" ]] && return 0
+    [[ $ITERATION -ge $MAX_ITERATIONS ]] && { log_warn "Max iterations ($MAX_ITERATIONS)"; return 0; }
+    local elapsed=$(( ($(date +%s) - START_TIME) / 3600 ))
+    [[ $elapsed -ge $MAX_HOURS ]] && { log_warn "Time limit (${MAX_HOURS}h)"; return 0; }
+    if [[ $MAX_MILESTONES -gt 0 ]]; then
+        local done; done=$(evolve_get_completed_count)
+        [[ $done -ge $MAX_MILESTONES ]] && { log_success "Max milestones reached ($MAX_MILESTONES)"; return 0; }
+    fi
+    return 1
+}
+
+# Extract next pending milestone id and title from milestones.json (no jq)
+evolve_get_next_milestone() {
+    # Find first milestone with "status": "pending" — extract its id and title
+    python3 - "$MILESTONES_FILE" << 'PYEOF' 2>/dev/null || echo ""
+import json, sys
+data = json.load(open(sys.argv[1]))
+for m in data.get("milestones", []):
+    if m.get("status") == "pending":
+        print(f'{m["id"]}|||{m["title"]}|||{m["description"]}')
+        break
+PYEOF
+}
+
+# Mark a milestone as active/completed in milestones.json
+evolve_update_milestone_status() {
+    local id=$1 new_status=$2 extra_field=${3:-} extra_value=${4:-}
+    python3 - "$MILESTONES_FILE" "$id" "$new_status" "$extra_field" "$extra_value" << 'PYEOF' 2>/dev/null
+import json, sys
+from datetime import datetime, timezone
+
+path, mid, status, ef, ev = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+data = json.load(open(path))
+for m in data["milestones"]:
+    if m["id"] == mid:
+        m["status"] = status
+        if status == "active":
+            m["startedAt"] = datetime.now(timezone.utc).isoformat()
+        elif status == "completed":
+            m["completedAt"] = datetime.now(timezone.utc).isoformat()
+            data["completedCount"] = data.get("completedCount", 0) + 1
+            data["currentMilestone"] = None
+        if ef:
+            m[ef] = ev
+        break
+json.dump(data, open(path, "w"), indent=2)
+PYEOF
+    log_info "Milestone $id → $new_status"
+}
+
+evolve_set_gsd_project() {
+    local id=$1 gsd_path=$2
+    python3 - "$MILESTONES_FILE" "$id" "$gsd_path" << 'PYEOF' 2>/dev/null
+import json, sys
+path, mid, gsd = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+data = json.load(open(path))
+for m in data["milestones"]:
+    if m["id"] == mid:
+        m["gsdProject"] = gsd
+        break
+json.dump(data, open(path, "w"), indent=2)
+PYEOF
+}
+
+# Build the strategist prompt
+build_strategist_prompt() {
+    local is_reeval=${1:-false}
+    local focus_clause=""
+    [[ -n "$EVOLVE_FOCUS" ]] && focus_clause="Focus only on these areas: $EVOLVE_FOCUS"
+
+    local completed; completed=$(evolve_get_completed_count)
+    local milestones_content; milestones_content=$(cat "$MILESTONES_FILE")
+
+    cat << PROMPT
+## AUTOPILOT EVOLVE — Strategist Agent
+
+You are the Autopilot Strategist. Your job is to analyze this codebase and generate prioritized milestones.
+
+**Project root**: $PROJECT_DIR
+**Is re-evaluation**: $is_reeval
+**Milestones completed so far**: $completed
+$focus_clause
+
+### Current milestones.json
+$milestones_content
+
+### Your Task
+
+Follow the Strategist Agent protocol:
+1. Read CLAUDE.md, README.md, package.json (or equivalent) in $PROJECT_DIR
+2. Run \`git log --oneline -20\` and \`git diff --stat HEAD~5 HEAD\`
+3. Scan codebase health across: tests, error handling, types, security, performance, observability, DX, architecture
+4. Generate 5-10 concrete, achievable milestones
+5. Write updated milestones to $AUTOPILOT_DIR/milestones.json
+6. Append strategist summary to $AUTOPILOT_DIR/handoff.md
+
+Rules:
+- Preserve ALL milestones with "status": "completed" exactly as-is
+- Do NOT regenerate milestones that are already "pending" unless they're now obsolete
+- Be opinionated: generate milestones a senior engineer would be proud of
+- Each milestone description must be specific enough to hand directly to /gsd:new-milestone
+
+When done, output: AUTOPILOT_STATUS: STRATEGIST_COMPLETE
+PROMPT
+}
+
+# Run the strategist to generate/refresh milestones
+run_strategist() {
+    local is_reeval=${1:-false}
+    local prompt
+    prompt=$(build_strategist_prompt "$is_reeval")
+
+    log_phase "Strategist — $([ "$is_reeval" == "true" ] && echo "Re-evaluating" || echo "Generating") milestones"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[DRY RUN] Would run strategist agent"
+        return 0
+    fi
+
+    local strat_log="$AUTOPILOT_DIR/iterations/strategist-${ITERATION}.log"
+    mkdir -p "$AUTOPILOT_DIR/iterations"
+
+    cd "$PROJECT_DIR"
+    claude -p "$prompt" \
+        --dangerously-skip-permissions \
+        --allowedTools '*' \
+        2>&1 | tee "$strat_log" || true
+
+    if ! grep -q "AUTOPILOT_STATUS: STRATEGIST_COMPLETE" "$strat_log" 2>/dev/null; then
+        log_warn "Strategist did not signal completion — continuing anyway"
+    fi
+
+    local pending; pending=$(evolve_get_pending_count)
+    log_info "Strategist complete — $pending milestones pending"
+}
+
+# Build the GSD new-milestone prompt for a given milestone
+build_new_milestone_prompt() {
+    local title=$1 description=$2
+
+    cat << PROMPT
+## AUTOPILOT EVOLVE — New Milestone Setup
+
+You are setting up a new GSD milestone inside the Autopilot evolve loop.
+
+**Project root**: $PROJECT_DIR
+**Milestone title**: $title
+**Milestone description**: $description
+
+### Your Task
+
+Run the skill /gsd:new-milestone with this milestone as input.
+
+The skill will:
+1. Create a .planning/ directory (or add to existing one)
+2. Generate a ROADMAP.md with phases
+3. Set up the milestone structure
+
+After /gsd:new-milestone completes, report back:
+- The path to the ROADMAP.md that was created
+- How many phases were defined
+
+Output the planning directory path as:
+MILESTONE_PLANNING_PATH: <absolute path to .planning/ directory>
+
+Then output: AUTOPILOT_STATUS: MILESTONE_SETUP_COMPLETE
+PROMPT
+}
+
+# Initialize a GSD milestone for the given milestone entry
+run_new_milestone() {
+    local id=$1 title=$2 description=$3
+    local prompt
+    prompt=$(build_new_milestone_prompt "$title" "$description")
+
+    log_phase "Setting up GSD milestone: $title"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[DRY RUN] Would run /gsd:new-milestone for: $title"
+        return 0
+    fi
+
+    local setup_log="$AUTOPILOT_DIR/iterations/milestone-setup-${id}.log"
+    mkdir -p "$AUTOPILOT_DIR/iterations"
+
+    cd "$PROJECT_DIR"
+    claude -p "$prompt" \
+        --dangerously-skip-permissions \
+        --allowedTools '*' \
+        2>&1 | tee "$setup_log" || true
+
+    # Extract planning path from output
+    local planning_path
+    planning_path=$(grep "MILESTONE_PLANNING_PATH:" "$setup_log" 2>/dev/null | tail -1 | sed 's/MILESTONE_PLANNING_PATH: *//')
+
+    if [[ -n "$planning_path" ]]; then
+        evolve_set_gsd_project "$id" "$planning_path"
+        log_info "GSD project at: $planning_path"
+    else
+        log_warn "Could not extract planning path — using default .planning/"
+        evolve_set_gsd_project "$id" "$PROJECT_DIR/.planning"
+    fi
+}
+
+#=============================================================================
 # GSD Execute Mode Main Loop
 #=============================================================================
 
@@ -520,6 +780,93 @@ gsd_main_loop() {
 
         sleep 3
     done
+}
+
+#=============================================================================
+# Evolve Mode Main Loop
+#=============================================================================
+
+evolve_main_loop() {
+    log_info "Evolve Mode — autonomous milestone generation and execution"
+
+    evolve_init_state
+
+    local milestone_count=0
+    local first_run=true
+
+    while ! evolve_should_stop; do
+        # ── Phase A: Generate / refresh milestones ──────────────────────────
+        local pending; pending=$(evolve_get_pending_count)
+
+        if [[ "$pending" -eq 0 ]]; then
+            # Need new milestones (first run or all exhausted)
+            local is_reeval="false"
+            [[ "$first_run" == "false" ]] && is_reeval="true"
+
+            run_strategist "$is_reeval"
+            first_run=false
+
+            pending=$(evolve_get_pending_count)
+            if [[ "$pending" -eq 0 ]]; then
+                log_success "Strategist found no new milestones — evolve complete"
+                sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "complete"/' "$AUTOPILOT_DIR/mission.json"
+                break
+            fi
+        fi
+
+        # ── Phase B: Pick next milestone ────────────────────────────────────
+        local next_info
+        next_info=$(evolve_get_next_milestone)
+
+        if [[ -z "$next_info" ]]; then
+            log_warn "No next milestone found despite pending count > 0 — check milestones.json"
+            break
+        fi
+
+        local ms_id ms_title ms_desc
+        ms_id=$(echo "$next_info" | cut -d'|' -f1)
+        ms_title=$(echo "$next_info" | cut -d'|' -f4)
+        ms_desc=$(echo "$next_info" | cut -d'|' -f7-)
+
+        milestone_count=$((milestone_count + 1))
+        log_phase "Milestone $milestone_count: $ms_title (id=$ms_id)"
+
+        # Mark active
+        evolve_update_milestone_status "$ms_id" "active"
+
+        # ── Phase C: Initialize GSD milestone ───────────────────────────────
+        run_new_milestone "$ms_id" "$ms_title" "$ms_desc"
+
+        if evolve_should_stop; then break; fi
+
+        # ── Phase D: Execute all GSD phases for this milestone ──────────────
+        # Reset per-phase tracking for this milestone
+        unset GSD_PHASE_DEPS GSD_PHASE_STUCK_COUNT GSD_PHASE_LAST_ACTION GSD_PHASE_SKIPPED
+        declare -A GSD_PHASE_DEPS
+        declare -A GSD_PHASE_STUCK_COUNT
+        declare -A GSD_PHASE_LAST_ACTION
+        declare -A GSD_PHASE_SKIPPED
+
+        log_info "Starting GSD phase execution for milestone: $ms_title"
+        gsd_main_loop
+
+        # ── Phase E: Mark milestone complete, re-evaluate ───────────────────
+        evolve_update_milestone_status "$ms_id" "completed"
+        local done_count; done_count=$(evolve_get_completed_count)
+        log_success "Milestone $milestone_count complete! (Total completed: $done_count)"
+
+        if evolve_should_stop; then break; fi
+
+        # Re-run strategist to reprioritize remaining milestones
+        # (codebase changed — some pending ideas may be obsolete or new ones emerged)
+        log_info "Re-evaluating milestones after codebase change..."
+        run_strategist "true"
+
+        sleep 5
+    done
+
+    local total_done; total_done=$(evolve_get_completed_count)
+    log_success "Evolve session ended — $total_done milestones completed"
 }
 
 #=============================================================================
@@ -722,7 +1069,12 @@ main() {
     local mode
     mode=$(get_mode)
 
-    if [[ "$mode" == "execute" ]]; then
+    if [[ "$mode" == "evolve" ]]; then
+        # Evolve Mode — autonomous milestone generation + GSD execution
+        log_info "Max milestones: $([ $MAX_MILESTONES -gt 0 ] && echo $MAX_MILESTONES || echo "unlimited")"
+        [[ -n "$EVOLVE_FOCUS" ]] && log_info "Focus areas: $EVOLVE_FOCUS"
+        evolve_main_loop
+    elif [[ "$mode" == "execute" ]]; then
         # GSD Execute Mode — uses actual GSD agents and commands
         gsd_main_loop
     else

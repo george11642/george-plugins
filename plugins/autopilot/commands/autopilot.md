@@ -1,7 +1,7 @@
 ---
 name: autopilot
-description: "Start autonomous coding loop. Modes: mission (default), improve, execute, research."
-argument-hint: '"mission description" [--mode mission|improve|execute|research] [--hours N] [--max-iterations N] [--parallel N] [--dry-run]'
+description: "Start autonomous coding loop. Modes: mission (default), improve, execute, research, evolve."
+argument-hint: '"mission description" [--mode mission|improve|execute|research|evolve] [--hours N] [--max-iterations N] [--parallel N] [--milestones N] [--focus "areas"] [--dry-run]'
 ---
 
 # /autopilot — Autonomous Overnight Coding Agent
@@ -13,14 +13,17 @@ Start a fully autonomous coding loop that runs for hours without human intervent
 ### 1. Parse arguments
 
 Extract from `$ARGUMENTS`:
-- **Mission text**: The quoted string (required for mission/research modes)
-- `--mode`: `mission` (default) | `improve` | `execute` | `research`
+- **Mission text**: The quoted string (required for mission/research modes; optional for evolve/improve)
+- `--mode`: `mission` (default) | `improve` | `execute` | `research` | `evolve`
 - `--hours`: Max runtime in hours (default: 8)
 - `--max-iterations`: Safety limit per session (default: 50)
 - `--parallel`: Max parallel subagents per iteration (default: 3)
 - `--plan`: Path to existing plan file (for execute mode, defaults to .planning/ROADMAP.md)
 - `--scope`: Limit to specific directories (comma-separated)
 - `--skip-discuss`: In execute mode, skip GSD discuss phases (go straight to plan)
+- `--milestones N`: In evolve mode, max milestones to complete (default: unlimited)
+- `--focus AREAS`: In evolve mode, comma-separated focus areas for the strategist
+  e.g., `"testing,security"` or `"performance,reliability,observability"`
 - `--dry-run`: Preview what would happen
 
 If no arguments provided, ask the user what they want to accomplish.
@@ -77,17 +80,30 @@ Before starting the loop, do a quick codebase scan:
    - **improve**: Run a codebase health scan (test coverage, lint issues, TODOs, security, performance), prioritize findings into tasks
    - **execute**: Delegate to GSD agents — uses actual `/gsd:discuss-phase`, `/gsd:plan-phase`, `/gsd:execute-phase`, `/gsd:verify-work` commands. Reads `.planning/ROADMAP.md` for phase dependencies, dispatches phases in dependency order with stuck detection. Requires `.planning/` directory (run `/gsd:new-project` first).
    - **research**: Create research subtopics as tasks
+   - **evolve**: Do NOT decompose into tasks. Just initialize state files and start the loop. The strategist agent inside the loop generates milestones autonomously. Write an empty `tasks: []` to progress.json. Initialize `.autopilot/milestones.json` with empty milestones array.
 4. Write the task list to `.autopilot/progress.json`
 5. Write initial handoff notes to `.autopilot/handoff.md`
 
 ### 4. Start the autonomous loop
 
+For modes other than `evolve`:
 ```bash
 nohup bash "${CLAUDE_PLUGIN_ROOT}/scripts/autopilot.sh" \
   --project-dir "$(pwd)" \
   --max-iterations <N> \
   --hours <N> \
   --parallel <N> \
+  > .autopilot/loop.log 2>&1 &
+```
+
+For `evolve` mode, also pass `--milestones` and `--focus` if provided:
+```bash
+nohup bash "${CLAUDE_PLUGIN_ROOT}/scripts/autopilot.sh" \
+  --project-dir "$(pwd)" \
+  --max-iterations <N> \
+  --hours <N> \
+  --milestones <N_or_omit> \
+  --focus "<focus_or_omit>" \
   > .autopilot/loop.log 2>&1 &
 ```
 
