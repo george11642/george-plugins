@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cat \"${CLAUDE_PLUGIN_ROOT}/skills/orchestration-engine/SKILL.md\"",
+            "command": "node -e \"process.stdout.write(require('fs').readFileSync(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'skills','orchestration-engine','SKILL.md'),'utf8'))\"",
             "timeout": 5
           }
         ]
