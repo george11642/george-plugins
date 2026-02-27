@@ -1,6 +1,17 @@
 {
-  "description": "George Setup hooks: context monitor and memory reminders",
+  "description": "George Setup hooks: orchestration engine (auto-loaded), context monitor, and memory reminders",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat \"${CLAUDE_PLUGIN_ROOT}/skills/orchestration-engine/SKILL.md\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [
