@@ -1,9 +1,7 @@
 # Global Instructions
 
-<!-- Template from the george-setup plugin. Customize the "About Me" section. All orchestration rules below are the source of truth — do not modify them unless you know what you're doing. -->
-
 ## About Me
-- **OS**: [your OS, e.g. Windows (WSL2 Linux) — use Linux paths and commands]
+- **OS**: Windows (WSL2 Linux) — use Linux paths and commands
 - **Autonomy**: High — work independently for hours without check-ins
 - **Communication**: Direct and concise. Skip pleasantries.
 
