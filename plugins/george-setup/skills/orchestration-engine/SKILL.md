@@ -14,7 +14,7 @@ The main conversation is an **orchestrator**. It routes, synthesizes, and NEVER 
 
 Before you read any files, before you spawn any agents, before you write any code — do these steps IN ORDER:
 
-**Step 0a: Scan your available skills list (visible in system context) and invoke any domain-relevant skills using the Skill tool.** Do this FIRST — not after reading files, not after "quickly checking something." For example, if the task involves React/Next.js UI, invoke skills like `building-native-ui`, `nextjs-app-router-patterns`, `web-design-guidelines`. Skip routing/process skills (superseded by this system).
+**Step 0a: Scan your available skills list (visible in system context) and invoke any domain-relevant skills using the Skill tool.** Do this FIRST — not after reading files, not after "quickly checking something." For example, if the task involves React/Next.js UI, invoke skills like `building-native-ui`, `nextjs-app-router-patterns`, `web-design-guidelines`. If it involves a backend framework, check for relevant backend skills. Skip routing/process skills (superseded by this system).
 
 **Step 0b: Use Context7 when you're unsure about a library API or using it for the first time in this task.** Call `resolve-library-id` → `query-docs` with the specific topic. Skip it for well-known patterns you've used repeatedly in this codebase. Use your judgment — when in doubt, query.
 
@@ -85,8 +85,6 @@ MCPs are lazy-loaded with zero context cost. Use them as your default, not as a 
 |---------|------------|
 | Using any external library API | **Context7**: `resolve-library-id` → `query-docs` with specific topic |
 | Need to verify UI works | **Playwright** or **Superpowers Chrome**: take screenshot, check DOM |
-| Clerk auth work | **Clerk MCP**: `clerk_sdk_snippet` for code examples |
-| Sentry errors/monitoring | **Sentry MCP**: `search_issues`, `get_issue_details` |
 | Task involves an external service | **ToolSearch** first — an MCP may already exist for it |
 | Writing tests for a framework | **Context7**: query latest testing patterns/API |
 
@@ -124,8 +122,8 @@ Scan your available skills list at the start of every T1+ task and invoke any th
 
 ### Post-Task Verification (every T1+ task — DO NOT SKIP)
 After completing any T1+ task, do ALL of these:
-1. **Run tests**: `pnpm test` (or relevant test command). Not optional.
-2. **Type-check**: `pnpm type-check` if TypeScript was touched.
+1. **Run tests**: run the project's test command. Not optional.
+2. **Type-check**: run the project's type-check command if TypeScript was touched.
 3. **Screenshot**: If the task changed UI, use Playwright or Superpowers Chrome to screenshot the page and verify it renders correctly.
 4. **Cross-system check**: If you touched system A that connects to system B, verify B still works.
 
