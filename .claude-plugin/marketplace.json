@@ -28,6 +28,17 @@
       },
       "source": "./plugins/ralph-gsd",
       "category": "automation"
+    },
+    {
+      "name": "autopilot",
+      "description": "Fully autonomous overnight coding agent. Give it a mission, walk away for hours, come back to a better codebase. Supports mission-driven development, codebase improvement, plan execution, and deep research modes.",
+      "version": "1.0.0",
+      "author": {
+        "name": "George Teifel",
+        "email": "george.teifel@gmail.com"
+      },
+      "source": "./plugins/autopilot",
+      "category": "automation"
     }
   ]
 }
