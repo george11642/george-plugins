@@ -18,8 +18,9 @@ Extract from `$ARGUMENTS`:
 - `--hours`: Max runtime in hours (default: 8)
 - `--max-iterations`: Safety limit per session (default: 50)
 - `--parallel`: Max parallel subagents per iteration (default: 3)
-- `--plan`: Path to existing plan file (required for execute mode)
+- `--plan`: Path to existing plan file (for execute mode, defaults to .planning/ROADMAP.md)
 - `--scope`: Limit to specific directories (comma-separated)
+- `--skip-discuss`: In execute mode, skip GSD discuss phases (go straight to plan)
 - `--dry-run`: Preview what would happen
 
 If no arguments provided, ask the user what they want to accomplish.
@@ -74,7 +75,7 @@ Before starting the loop, do a quick codebase scan:
 3. Based on the mode:
    - **mission**: Decompose the mission into 5-15 concrete tasks, write to progress.json
    - **improve**: Run a codebase health scan (test coverage, lint issues, TODOs, security, performance), prioritize findings into tasks
-   - **execute**: Parse the plan file into tasks
+   - **execute**: Delegate to GSD agents — uses actual `/gsd:discuss-phase`, `/gsd:plan-phase`, `/gsd:execute-phase`, `/gsd:verify-work` commands. Reads `.planning/ROADMAP.md` for phase dependencies, dispatches phases in dependency order with stuck detection. Requires `.planning/` directory (run `/gsd:new-project` first).
    - **research**: Create research subtopics as tasks
 4. Write the task list to `.autopilot/progress.json`
 5. Write initial handoff notes to `.autopilot/handoff.md`

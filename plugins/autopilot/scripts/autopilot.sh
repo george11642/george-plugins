@@ -20,18 +20,25 @@ set -euo pipefail
 # Configuration
 #=============================================================================
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR=""
 MAX_ITERATIONS=50
 MAX_HOURS=8
 MAX_PARALLEL=3
+SKIP_DISCUSS=false
 RESUME=false
 DRY_RUN=false
 ITERATION=0
 START_TIME=""
 AUTOPILOT_DIR=""
 LOG_FILE=""
+
+# GSD execute mode state
+declare -A GSD_PHASE_DEPS
+declare -A GSD_PHASE_STUCK_COUNT
+declare -A GSD_PHASE_LAST_ACTION
+declare -A GSD_PHASE_SKIPPED
 
 #=============================================================================
 # Colors
@@ -62,6 +69,7 @@ parse_args() {
             --max-iterations) MAX_ITERATIONS="$2"; shift 2 ;;
             --hours)         MAX_HOURS="$2"; shift 2 ;;
             --parallel)      MAX_PARALLEL="$2"; shift 2 ;;
+            --skip-discuss)  SKIP_DISCUSS=true; shift ;;
             --resume)        RESUME=true; shift ;;
             --dry-run)       DRY_RUN=true; shift ;;
             --help)          show_help; exit 0 ;;
@@ -162,7 +170,360 @@ should_stop() {
 }
 
 #=============================================================================
-# Prompt Construction
+# GSD Execute Mode — State Detection & Command Mapping
+#=============================================================================
+
+# Get list of phases from ROADMAP.md
+gsd_get_phases() {
+    local roadmap="$PROJECT_DIR/.planning/ROADMAP.md"
+    [[ ! -f "$roadmap" ]] && { log_error "ROADMAP.md not found"; return 1; }
+    grep -oE 'Phase [0-9]+' "$roadmap" | grep -oE '[0-9]+' | sort -u -n
+}
+
+# Get status of a GSD phase
+gsd_get_phase_status() {
+    local phase=$1
+    local state_file="$PROJECT_DIR/.planning/STATE.md"
+    local phase_dir="$PROJECT_DIR/.planning/phases"
+
+    # Check STATE.md for completion
+    if [[ -f "$state_file" ]]; then
+        if grep -E "^\|[[:space:]]*$phase\.[[:space:]].*\|[[:space:]]*Completed[[:space:]]*\|" "$state_file" >/dev/null 2>&1; then
+            echo "verified"; return
+        fi
+    fi
+
+    local phase_padded=$(printf "%02d" "$phase")
+    local phase_path=""
+
+    # Find phase directory (handles 06, 06-name, etc.)
+    if [[ -d "$phase_dir/$phase_padded" ]]; then
+        phase_path="$phase_dir/$phase_padded"
+    elif [[ -d "$phase_dir/$phase" ]]; then
+        phase_path="$phase_dir/$phase"
+    else
+        local found_dir
+        found_dir=$(find "$phase_dir" -maxdepth 1 -type d -name "${phase_padded}-*" 2>/dev/null | head -1)
+        if [[ -z "$found_dir" ]]; then
+            found_dir=$(find "$phase_dir" -maxdepth 1 -type d -name "${phase}-*" 2>/dev/null | head -1)
+        fi
+        if [[ -n "$found_dir" && -d "$found_dir" ]]; then
+            phase_path="$found_dir"
+        else
+            echo "not_started"; return
+        fi
+    fi
+
+    # Check VERIFICATION.md
+    local verification_file=""
+    if [[ -f "$phase_path/VERIFICATION.md" ]]; then
+        verification_file="$phase_path/VERIFICATION.md"
+    else
+        verification_file=$(find "$phase_path" -maxdepth 1 -name "*VERIFICATION.md" 2>/dev/null | head -1)
+    fi
+
+    if [[ -n "$verification_file" && -f "$verification_file" ]]; then
+        if grep -qi "VERIFIED\|PASSED\|SUCCESS\|ALL.*COMPLETE" "$verification_file" 2>/dev/null; then
+            echo "verified"; return
+        else
+            echo "gaps"; return
+        fi
+    fi
+
+    # Check PLAN and SUMMARY files
+    local plan_count summary_count
+    plan_count=$(find "$phase_path" -maxdepth 1 -name "*PLAN.md" 2>/dev/null | wc -l)
+    summary_count=$(find "$phase_path" -maxdepth 1 -name "*SUMMARY.md" 2>/dev/null | wc -l)
+
+    if [[ $plan_count -gt 0 && $summary_count -ge $plan_count ]]; then
+        echo "executed"; return
+    fi
+    if [[ $plan_count -gt 0 && $summary_count -gt 0 ]]; then
+        echo "partially_executed"; return
+    fi
+    if [[ $plan_count -gt 0 ]]; then
+        echo "planned"; return
+    fi
+
+    # Check for context/research files
+    if [[ -f "$phase_path/CONTEXT.md" ]] || [[ -f "$phase_path/DISCUSSION.md" ]]; then
+        echo "context_captured"; return
+    fi
+    if compgen -G "$phase_path/*RESEARCH.md" > /dev/null 2>&1; then
+        echo "context_captured"; return
+    fi
+
+    echo "not_started"
+}
+
+# Map phase status to GSD command
+gsd_determine_action() {
+    local phase=$1
+    local status
+    status=$(gsd_get_phase_status "$phase")
+
+    case $status in
+        not_started)
+            if [[ "$SKIP_DISCUSS" == true ]]; then
+                echo "plan-phase $phase"
+            else
+                echo "discuss-phase $phase"
+            fi ;;
+        context_captured)  echo "plan-phase $phase" ;;
+        planned)           echo "execute-phase $phase" ;;
+        partially_executed) echo "execute-phase $phase" ;;
+        executed)          echo "verify-work $phase" ;;
+        gaps)              echo "plan-phase $phase --gaps" ;;
+        verified)          echo "NEXT_PHASE" ;;
+        *)                 echo "ERROR" ;;
+    esac
+}
+
+# Parse phase dependencies from ROADMAP.md
+gsd_parse_dependencies() {
+    local roadmap="$PROJECT_DIR/.planning/ROADMAP.md"
+    [[ ! -f "$roadmap" ]] && return 1
+
+    local current_phase=""
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^##+[[:space:]]*Phase[[:space:]]+([0-9]+) ]]; then
+            current_phase="${BASH_REMATCH[1]}"
+            GSD_PHASE_DEPS["$current_phase"]=""
+        fi
+        if [[ -n "$current_phase" ]] && [[ "$line" =~ \*\*Depends[[:space:]]+on\*\*:[[:space:]]*(.*) ]]; then
+            local deps_line="${BASH_REMATCH[1]}"
+            local deps=""
+            while [[ "$deps_line" =~ Phase[[:space:]]+([0-9]+) ]]; do
+                deps="$deps ${BASH_REMATCH[1]}"
+                deps_line="${deps_line#*Phase ${BASH_REMATCH[1]}}"
+            done
+            GSD_PHASE_DEPS["$current_phase"]="${deps# }"
+        fi
+    done < "$roadmap"
+}
+
+# Check if phase dependencies are met
+gsd_deps_met() {
+    local phase=$1
+    local deps="${GSD_PHASE_DEPS[$phase]:-}"
+    [[ -z "$deps" ]] && return 0
+    for dep in $deps; do
+        [[ "$(gsd_get_phase_status "$dep")" != "verified" ]] && return 1
+    done
+    return 0
+}
+
+# Get ready phases (deps met, not verified, not stuck)
+gsd_get_ready_phases() {
+    local phases
+    phases=$(gsd_get_phases) || { echo "ERROR"; return; }
+
+    local ready="" all_verified=true
+
+    for phase in $phases; do
+        local status
+        status=$(gsd_get_phase_status "$phase")
+        [[ "$status" == "verified" ]] && continue
+        all_verified=false
+        [[ -n "${GSD_PHASE_SKIPPED[$phase]:-}" ]] && continue
+        gsd_deps_met "$phase" && ready="$ready $phase"
+    done
+
+    if [[ "$all_verified" == true ]]; then echo "COMPLETE"; return; fi
+    ready="${ready# }"
+    if [[ -z "$ready" ]]; then echo "DEADLOCK"; return; fi
+    echo "$ready"
+}
+
+# Per-phase stuck detection
+gsd_is_stuck() {
+    local phase=$1 action=$2
+    local last="${GSD_PHASE_LAST_ACTION[$phase]:-}"
+    local count="${GSD_PHASE_STUCK_COUNT[$phase]:-0}"
+
+    if [[ "$action" == "$last" ]]; then
+        count=$((count + 1))
+        GSD_PHASE_STUCK_COUNT["$phase"]=$count
+        [[ $count -ge 3 ]] && return 0
+    else
+        GSD_PHASE_STUCK_COUNT["$phase"]=1
+        GSD_PHASE_LAST_ACTION["$phase"]="$action"
+    fi
+    return 1
+}
+
+# Build GSD autonomous prompt
+build_gsd_prompt() {
+    local gsd_command=$1
+
+    cat << 'GSD_PREAMBLE'
+## AUTOPILOT — GSD Execute Mode
+
+You are running in autonomous mode inside the Autopilot loop, executing GSD phases.
+
+### Checkpoint Handling
+- **checkpoint:human-verify** → Log to .autopilot/handoff.md, CONTINUE. Assume correct.
+- **checkpoint:decision** → Choose the most sensible option. Log: "AUTO-DECIDED: [choice] because [reason]"
+- **checkpoint:human-action** → Log and SKIP. Continue with next task.
+
+### Completion Signal
+When the GSD command completes: AUTOPILOT_STATUS: ITERATION_COMPLETE
+On unrecoverable error: AUTOPILOT_STATUS: ERROR
+GSD_PREAMBLE
+
+    cat << EOF
+
+---
+
+## Current Task
+
+Run the following GSD command:
+
+/gsd:$gsd_command
+
+Work autonomously. Do not ask for human input. Make sensible default choices.
+Log any skipped checkpoints to .autopilot/handoff.md.
+
+After the GSD command completes, also update .autopilot/handoff.md with:
+- What phase and step you just completed
+- What the next iteration should know
+- Any issues encountered
+
+When complete, output: AUTOPILOT_STATUS: ITERATION_COMPLETE
+EOF
+}
+
+# Check if GSD milestone is complete
+gsd_is_complete() {
+    local phases
+    phases=$(gsd_get_phases) || return 1
+    for phase in $phases; do
+        [[ "$(gsd_get_phase_status "$phase")" != "verified" ]] && return 1
+    done
+    return 0
+}
+
+# GSD should_stop (overrides default for execute mode)
+gsd_should_stop() {
+    [[ -f "$AUTOPILOT_DIR/STOP" ]] && { log_info "Stop signal detected"; return 0; }
+    local status; status=$(get_status)
+    [[ "$status" == "complete" || "$status" == "stopped" ]] && return 0
+    [[ $ITERATION -ge $MAX_ITERATIONS ]] && { log_warn "Max iterations ($MAX_ITERATIONS)"; return 0; }
+    local elapsed=$(( ($(date +%s) - START_TIME) / 3600 ))
+    [[ $elapsed -ge $MAX_HOURS ]] && { log_warn "Time limit (${MAX_HOURS}h)"; return 0; }
+    gsd_is_complete && { log_success "All GSD phases complete!"; return 0; }
+    return 1
+}
+
+# Run a single GSD iteration
+run_gsd_iteration() {
+    local gsd_command=$1
+    local phase=$2
+
+    local prompt
+    prompt=$(build_gsd_prompt "$gsd_command")
+
+    log_phase "GSD Iteration $ITERATION — /gsd:$gsd_command (Phase $phase)"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[DRY RUN] Would run: /gsd:$gsd_command"
+        return 0
+    fi
+
+    local iteration_log="$AUTOPILOT_DIR/iterations/iteration-${ITERATION}.log"
+    mkdir -p "$AUTOPILOT_DIR/iterations"
+
+    cd "$PROJECT_DIR"
+
+    local exit_code=0
+    claude -p "$prompt" \
+        --dangerously-skip-permissions \
+        --verbose \
+        --allowedTools '*' \
+        2>&1 | tee "$iteration_log" || exit_code=$?
+
+    # Check for status signals
+    if grep -q "AUTOPILOT_STATUS: BLOCKED" "$iteration_log" 2>/dev/null; then
+        log_warn "Agent blocked — check .autopilot/handoff.md"
+        sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "blocked"/' "$AUTOPILOT_DIR/mission.json"
+        return 1
+    fi
+
+    if grep -q "AUTOPILOT_STATUS: ERROR" "$iteration_log" 2>/dev/null; then
+        log_error "Error in GSD iteration $ITERATION"
+    fi
+
+    return 0
+}
+
+#=============================================================================
+# GSD Execute Mode Main Loop
+#=============================================================================
+
+gsd_main_loop() {
+    log_info "GSD Execute Mode — parsing .planning/ state"
+
+    # Verify .planning/ exists
+    if [[ ! -d "$PROJECT_DIR/.planning" ]]; then
+        log_error "No .planning/ directory. Run /gsd:new-project first."
+        return 1
+    fi
+
+    # Parse dependencies
+    gsd_parse_dependencies || { log_error "Failed to parse dependencies"; return 1; }
+
+    while ! gsd_should_stop; do
+        ITERATION=$((ITERATION + 1))
+        local iter_start=$(date +%s)
+
+        # Get ready phases
+        local ready
+        ready=$(gsd_get_ready_phases)
+
+        case "$ready" in
+            COMPLETE)
+                log_success "All GSD phases complete!"
+                sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "complete"/' "$AUTOPILOT_DIR/mission.json"
+                break ;;
+            DEADLOCK)
+                log_error "Deadlock: phases remain but none have deps met"
+                break ;;
+            ERROR)
+                log_error "No phases found in ROADMAP.md"
+                break ;;
+        esac
+
+        # Pick first ready phase and determine action
+        local -a ready_array=($ready)
+        local phase="${ready_array[0]}"
+        local action
+        action=$(gsd_determine_action "$phase")
+
+        if [[ "$action" == "NEXT_PHASE" || "$action" == "ERROR" ]]; then
+            continue
+        fi
+
+        # Stuck detection
+        if gsd_is_stuck "$phase" "$action"; then
+            log_warn "Phase $phase stuck on '$action' (3x) — skipping"
+            GSD_PHASE_SKIPPED["$phase"]=1
+            continue
+        fi
+
+        # Run the GSD command
+        if ! run_gsd_iteration "$action" "$phase"; then
+            break
+        fi
+
+        local duration=$(( $(date +%s) - iter_start ))
+        log_info "Iteration $ITERATION took ${duration}s"
+
+        sleep 3
+    done
+}
+
+#=============================================================================
+# Prompt Construction (mission/improve/research modes)
 #=============================================================================
 
 build_iteration_prompt() {
@@ -357,23 +718,32 @@ main() {
         log_info "Resuming from iteration $ITERATION"
     fi
 
-    # Main loop — each iteration spawns a fresh Claude instance
-    while ! should_stop; do
-        ITERATION=$((ITERATION + 1))
+    # Route to the correct loop based on mode
+    local mode
+    mode=$(get_mode)
 
-        local iteration_start
-        iteration_start=$(date +%s)
+    if [[ "$mode" == "execute" ]]; then
+        # GSD Execute Mode — uses actual GSD agents and commands
+        gsd_main_loop
+    else
+        # Mission/Improve/Research — autopilot's own task loop
+        while ! should_stop; do
+            ITERATION=$((ITERATION + 1))
 
-        if ! run_iteration; then
-            break  # Mission complete or blocked
-        fi
+            local iteration_start
+            iteration_start=$(date +%s)
 
-        local iteration_duration=$(( $(date +%s) - iteration_start ))
-        log_info "Iteration $ITERATION took ${iteration_duration}s"
+            if ! run_iteration; then
+                break  # Mission complete or blocked
+            fi
 
-        # Brief pause between iterations (let file system sync, rate limits)
-        sleep 3
-    done
+            local iteration_duration=$(( $(date +%s) - iteration_start ))
+            log_info "Iteration $ITERATION took ${iteration_duration}s"
+
+            # Brief pause between iterations (let file system sync, rate limits)
+            sleep 3
+        done
+    fi
 
     # Final summary
     local total_time=$(( ($(date +%s) - START_TIME) / 60 ))
