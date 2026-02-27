@@ -2,7 +2,7 @@
 
 <!-- Installed by george-setup plugin. Add your own learnings below. -->
 
-Linked from CLAUDE.md. See `~/.claude/CLAUDE.md` for the concise routing table.
+Auto-loaded by george-setup SessionStart hook. Read this file at the start of every session for orchestration rules.
 
 **Tiers are cumulative** — each tier composes all lower tiers internally. A T4 Ralph loop dispatches phases that use T1/T2 agents; a T3 agent team coordinates T1/T2 work. You pick the **entry point** based on overall task complexity; the orchestration layer within that tier uses lower tiers as building blocks.
 
@@ -13,6 +13,19 @@ T4 Ralph Loop
          └─ T1/T2 agents execute T0 inline edits
 ```
 
+## Pre-Flight Checklist (EVERY T1+ TASK — DO THIS FIRST)
+
+Before reading any files, before spawning any agents, before writing any code:
+
+**Step 0a**: Scan available skills list → invoke domain-relevant skills (e.g. React UI → `building-native-ui`, `nextjs-app-router-patterns`). Skip routing/process skills (superseded by T0-T4).
+
+**Step 0b**: Use Context7 when unsure about a library API or using it for the first time. Call `resolve-library-id` → `query-docs`. Skip for patterns used repeatedly in this codebase.
+
+**Step 0c**: Every agent prompt MUST include:
+> "BEFORE implementing: (1) Scan your available skills list and invoke any domain-relevant skills. (2) Use Context7 MCP — call resolve-library-id then query-docs — for [LIBRARY] docs. Do not implement library APIs from memory."
+
+IF YOU SKIPPED ANY PART, STOP. GO BACK. DO IT NOW.
+
 ## T0: Inline Execution
 - **When**: Single edit, obvious fix, <5 lines changed
 - **How**: Main agent executes directly. No TaskCreate, no agent spawn.
@@ -20,7 +33,7 @@ T4 Ralph Loop
 
 ## T1: Single Agent (composes T0)
 - **When**: One domain, bounded scope, 1-3 files
-- **How**: `Task` with appropriate `subagent_type` and `model`
+- **How**: `Task` with appropriate `subagent_type` and `model: "sonnet"`
 - **subagent_type options**: `general-purpose` (default, full edit), `Explore` (search/read-only), `Plan` (architecture, read-only), or any plugin agent
 - **Examples**: Implement a function, fix a bug, write tests for a module
 
@@ -126,12 +139,59 @@ T4 Ralph Loop
 | Security audit | `security-auditor` |
 | Database work | `database-architect` or `sql-pro` |
 
+## Model Strategy
+- **Main agent (orchestrator)**: Opus — routing, planning, architecture decisions only
+- **Execution agents (T1+)**: Always `model: "sonnet"` for implementation work
+- **Research/Explore agents**: `model: "haiku"` always. Only escalate to `"sonnet"` if haiku fails or the exploration requires multi-step reasoning
+- **Exception**: `model: "opus"` only for complex reasoning (architecture, gnarly debugging)
+
+## MCP Tools (USE THEM — not optional)
+
+MCPs are lazy-loaded with zero context cost. Use them as your default, not as a fallback.
+
+| Trigger | MCP Action |
+|---------|------------|
+| Using any external library API | **Context7**: `resolve-library-id` → `query-docs` with specific topic |
+| Need to verify UI works | **Playwright** or **Superpowers Chrome**: take screenshot, check DOM |
+| Clerk auth work | **Clerk MCP**: `clerk_sdk_snippet` for code examples |
+| Sentry errors/monitoring | **Sentry MCP**: `search_issues`, `get_issue_details` |
+| Task involves an external service | **ToolSearch** first — an MCP may already exist for it |
+| Writing tests for a framework | **Context7**: query latest testing patterns/API |
+
+## Post-Task Verification (every T1+ task — DO NOT SKIP)
+After completing any T1+ task, do ALL of these:
+1. **Run tests**: `pnpm test` (or relevant test command). Not optional.
+2. **Type-check**: `pnpm type-check` if TypeScript was touched.
+3. **Screenshot**: If the task changed UI, use Playwright or Superpowers Chrome to screenshot the page and verify it renders correctly.
+4. **Cross-system check**: If you touched system A that connects to system B, verify B still works.
+
+Failure → diagnose → fix → re-verify (max 2 retries before escalating to user).
+
+## Error Recovery
+1. First failure: diagnose root cause, fix inline
+2. Second failure (same issue): step back, try alternative strategy
+3. Third failure: escalate to user with diagnosis + 2-3 options
+4. **Never** brute-force retry the same failing approach
+
+## Context Protection Hard Limits (per response)
+- **Max 2 file reads** — only files you're about to edit in the same response
+- **Max 1 Grep/Glob** — if you need more, spawn Explore agent
+- **Output ≤15 lines** to the user unless they asked for an explanation
+- **Verification reads are allowed** after agents complete work — this does NOT extend to exploratory reads
+
 ## Skills Integration — What Works, What's Superseded
 
 The Superpowers plugin ships skills that define their own orchestration pipeline (`brainstorming → writing-plans → subagent-driven-dev/executing-plans → finishing-branch`). This pipeline is **superseded** by the T0-T4 tier system. The tier system is the single source of truth for routing, model selection, and context protection.
 
+### Superseded (never invoke)
+`subagent-driven-development`, `executing-plans`, `using-superpowers`, `finishing-a-development-branch`
+
+### Cherry-pick only
+- `brainstorming` — question techniques only
+- `writing-plans` — task format only
+- `dispatching-parallel-agents` — prompt structure tips only
+
 ### Complementary Skills (use freely)
-These add domain knowledge the tier system doesn't cover:
 
 | Skill | Value Add |
 |-------|-----------|
@@ -142,21 +202,11 @@ These add domain knowledge the tier system doesn't cover:
 | `/receiving-code-review` | How to process code review feedback |
 | `/using-git-worktrees` | Git worktree mechanics (when `isolation: "worktree"` is used) |
 
-### Domain-Only Skills (use for domain knowledge, ignore orchestration)
-These have useful techniques buried under conflicting routing advice:
-
-| Skill | Use | Ignore |
-|-------|-----|--------|
-| `/brainstorming` | One-question-at-a-time technique, approach trade-off presentation | Hard-gate on implementation, mandatory `docs/plans/` saves, chain to `writing-plans` |
-| `/dispatching-parallel-agents` | Agent prompt structure (scope, context, constraints, output format) | When-to-use decision tree (use T0-T4 instead) |
-
-### Superseded Skills (do not invoke)
-These define alternative orchestration systems that conflict with T0-T4:
-
-| Skill | Why Superseded |
-|-------|----------------|
-| `/subagent-driven-development` | Defines its own implementer→spec-reviewer→quality-reviewer pipeline. T3 teams do this better with flexible coordination. |
-| `/executing-plans` | Batch execution with human-in-loop checkpoints. Conflicts with high-autonomy user preference and T3/T4 execution. |
-| `/writing-plans` | Assumes worktree workflow, saves to arbitrary `docs/plans/`, chains to superseded execution skills. Use `EnterPlanMode` instead. |
-| `/using-superpowers` | Meta-skill that pressures invoking everything "even at 1% chance." Wastes context loading irrelevant skills. The CLAUDE.md skill section replaces it. |
-| `/finishing-a-development-branch` | Assumes worktree workflow with 4-option menu. Project deploy rules (auto-commit, push, deploy) make this unnecessary. |
+## Self-Check (before every T1+ response)
+- [ ] Did I scan skills and invoke relevant domain skills? If not → do it now.
+- [ ] Did I run Context7 for every external library? If not → do it now.
+- [ ] Did every agent prompt include the Step 0c block? If not → add it.
+- [ ] Did I pick the right tier? Cross-domain = T3, not T2.
+- [ ] After agents finished: did I run tests? If not → run them now.
+- [ ] After agents finished: did I screenshot UI changes? If not → do it now.
+- [ ] Is my output ≤15 lines (unless user asked for explanation)?

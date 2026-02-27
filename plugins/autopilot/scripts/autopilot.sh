@@ -604,9 +604,10 @@ Follow the Strategist Agent protocol:
 1. Read CLAUDE.md, README.md, package.json (or equivalent) in $PROJECT_DIR
 2. Run \`git log --oneline -20\` and \`git diff --stat HEAD~5 HEAD\`
 3. Scan codebase health across: tests, error handling, types, security, performance, observability, DX, architecture
-4. Generate 5-10 concrete, achievable milestones
-5. Write updated milestones to $AUTOPILOT_DIR/milestones.json
-6. Append strategist summary to $AUTOPILOT_DIR/handoff.md
+4. **On first run** (milestones completed = 0 and no pending milestones): run the research phase — use /gsd:research-phase or equivalent to deeply explore the codebase before generating milestones. This ensures milestones are grounded in actual code state, not assumptions.
+5. Generate 5-10 concrete, achievable milestones
+6. Write updated milestones to $AUTOPILOT_DIR/milestones.json
+7. Append strategist summary to $AUTOPILOT_DIR/handoff.md
 
 Rules:
 - Preserve ALL milestones with "status": "completed" exactly as-is
