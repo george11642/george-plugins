@@ -1,8 +1,9 @@
-# Orchestration Memory
+# Global CLAUDE.md — Orchestration Engine
 
-<!-- Installed by george-setup plugin. Add your own learnings below. -->
+<!-- Copy this file to ~/.claude/CLAUDE.md to use as your global instructions for all Claude Code projects. -->
+<!-- Customize the "About Me" section and project-specific details to match your setup. -->
 
-Auto-loaded by george-setup SessionStart hook. Read this file at the start of every session for orchestration rules.
+This is a global CLAUDE.md that enforces an orchestration-first workflow. The main conversation acts as a dispatcher — it routes tasks to specialized agents and NEVER does heavy implementation work inline. This protects context window usage and maximizes agent effectiveness.
 
 **Tiers are cumulative** — each tier composes all lower tiers internally. A T4 Ralph loop dispatches phases that use T1/T2 agents; a T3 agent team coordinates T1/T2 work. You pick the **entry point** based on overall task complexity; the orchestration layer within that tier uses lower tiers as building blocks.
 
