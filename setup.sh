@@ -58,7 +58,7 @@ fi
 
 # Copy orchestration memory if not present
 if [ ! -f "$CLAUDE_DIR/memory/orchestration.md" ]; then
-    MEMORY_TEMPLATE="$MARKETPLACE_DIR/plugins/george-setup/templates/orchestration-memory.md"
+    MEMORY_TEMPLATE="$MARKETPLACE_DIR/plugins/george-setup/templates/global-claude-md.md"
     if [ -f "$MEMORY_TEMPLATE" ]; then
         cp "$MEMORY_TEMPLATE" "$CLAUDE_DIR/memory/orchestration.md"
         echo "Installed orchestration memory"

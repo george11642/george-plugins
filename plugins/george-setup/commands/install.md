@@ -38,7 +38,7 @@ If any prerequisite fails, inform the user what's missing and which components w
 1. Create `~/.claude/memory/` if it doesn't exist
 2. If `~/.claude/memory/orchestration.md` doesn't exist, copy the template:
    ```bash
-   cp "${CLAUDE_PLUGIN_ROOT}/templates/orchestration-memory.md" ~/.claude/memory/orchestration.md
+   cp "${CLAUDE_PLUGIN_ROOT}/templates/global-claude-md.md" ~/.claude/memory/orchestration.md
    ```
 3. If it already exists, skip (don't overwrite user's memory)
 
