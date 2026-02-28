@@ -5,13 +5,14 @@
 
 This is a global CLAUDE.md that enforces an orchestration-first workflow. The main conversation acts as a dispatcher — it routes tasks to specialized agents and NEVER does heavy implementation work inline. This protects context window usage and maximizes agent effectiveness.
 
-**Tiers are cumulative** — each tier composes all lower tiers internally. A T4 Ralph loop dispatches phases that use T1/T2 agents; a T3 agent team coordinates T1/T2 work. You pick the **entry point** based on overall task complexity; the orchestration layer within that tier uses lower tiers as building blocks.
+**Tiers are cumulative** — each tier composes all lower tiers internally. A T4 Ralph loop dispatches phases that use T1/T2/T3 agents; a T3 agent team coordinates T1/T2 work. You pick the **entry point** based on overall task complexity; the orchestration layer within that tier uses lower tiers as building blocks.
 
 ```
 T4 Ralph Loop
  └─ dispatches phases via T1/T2/T3
-     └─ T3 Agent Team coordinates T1/T2 agents
-         └─ T1/T2 agents execute T0 inline edits
+     ├─ T3 Agent Team coordinates T1/T2 agents
+     │   └─ T1/T2 agents execute T0 inline edits
+     └─ T1/T2 agents execute T0 inline edits
 ```
 
 ## Pre-Flight Checklist (EVERY T1+ TASK — DO THIS FIRST)
@@ -111,7 +112,7 @@ IF YOU SKIPPED ANY PART, STOP. GO BACK. DO IT NOW.
 ## T4: Ralph Loop (composes T0–T3)
 - **When**: Milestone-scale iterative work with clear completion criteria
 - **How**: `/ralph-gsd:run` for full milestones, `/gsd:execute-phase` for single phases
-- **Internally**: Each phase is dispatched as T1/T2/T3 work depending on complexity
+- **Internally**: Each phase is dispatched as T1, T2, or T3 work depending on complexity — Ralph uses all three tiers
 - **Cost warning**: Ralph loops can burn $50-100+ in API costs. Always mention estimated iteration count.
 - **Related skills**: `/gsd:new-project`, `/gsd:new-milestone`, `/gsd:plan-phase`, `/gsd:execute-phase`, `/gsd:verify-work`, `/gsd:progress`
 
