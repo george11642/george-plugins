@@ -145,12 +145,17 @@ IF YOU SKIPPED ANY PART, STOP. GO BACK. DO IT NOW.
 - **Research/Explore agents**: `model: "haiku"` always. Only escalate to `"sonnet"` if haiku fails or the exploration requires multi-step reasoning
 - **Exception**: `model: "opus"` only for complex reasoning (architecture, gnarly debugging)
 
-## MCP Tools (USE THEM — not optional)
+## MCP Tools — Agents Use Them, Orchestrator Does NOT
 
-MCPs are lazy-loaded with zero context cost. Use them as your default, not as a fallback.
+MCPs are powerful but each call consumes orchestrator context. **The orchestrator instructs agents to use MCPs — it does not call them itself.**
 
-| Trigger | MCP Action |
-|---------|------------|
+**Orchestrator may:** use ToolSearch (once) to check if an MCP exists, then tell the agent to use it.
+**Orchestrator must NOT:** call Context7, Serena, Playwright, Sentry, Clerk, or any other MCP directly for T1+ tasks.
+
+Tell agents to use these MCPs in their prompts:
+
+| Trigger | Agent should use |
+|---------|-----------------|
 | Using any external library API | **Context7**: `resolve-library-id` → `query-docs` with specific topic |
 | Need to verify UI works | **Playwright** or **Superpowers Chrome**: take screenshot, check DOM |
 | Clerk auth work | **Clerk MCP**: `clerk_sdk_snippet` for code examples |
@@ -174,10 +179,19 @@ Failure → diagnose → fix → re-verify (max 2 retries before escalating to u
 4. **Never** brute-force retry the same failing approach
 
 ## Context Protection Hard Limits (per response)
+
+**The orchestrator dispatches. It does NOT do work.** Every inline tool call costs context. Agents have their own context — use them.
+
 - **Max 2 file reads** — only files you're about to edit in the same response
 - **Max 1 Grep/Glob** — if you need more, spawn Explore agent
+- **NEVER use MCP tools directly for T1+ tasks.** Context7, Serena, Playwright, Sentry, Clerk — all belong INSIDE agent prompts, not inline. The only exception is a single ToolSearch to discover if an MCP exists.
+- **NEVER do inline editing for T1+ tasks.** If you're calling Edit/Write on implementation files, STOP — spawn an agent. The orchestrator edits ONLY config/docs (CLAUDE.md, MEMORY.md) at T0 scope.
+- **NEVER do multi-step implementation inline.** If you're chaining tool calls (read → edit → read → edit), that's implementation — spawn an agent.
+- **Max 2 non-Task tool calls per response** (excluding TaskCreate/TaskList/TaskUpdate). If you need more, you're doing work, not dispatching.
 - **Output ≤15 lines** to the user unless they asked for an explanation
 - **Verification reads are allowed** after agents complete work — this does NOT extend to exploratory reads
+
+Before ANY tool call, ask: "Is this dispatching or doing?" If doing → delegate to an agent.
 
 ## Skills Integration — What Works, What's Superseded
 
@@ -202,9 +216,27 @@ The Superpowers plugin ships skills that define their own orchestration pipeline
 | `/receiving-code-review` | How to process code review feedback |
 | `/using-git-worktrees` | Git worktree mechanics (when `isolation: "worktree"` is used) |
 
+## Anti-patterns — STOP if you catch yourself doing any of these
+
+**Context-tanking violations (most critical):**
+- **Calling MCP tools (Context7, Serena, Playwright) directly** → put MCP calls in agent prompts, not inline
+- **Doing inline edits for T1+ work** → spawn an agent to do the editing
+- **Multi-step tool chains** (read → grep → read → edit → read) → this is implementation, not dispatching — spawn an agent
+- **"Let me quickly check/fix this"** → there is no "quickly" — every tool call costs context. Spawn an agent.
+- **Using 3+ non-Task tools in a single response** → you're doing work, not dispatching
+
+**Other violations:**
+- **Reading files to "understand"** → spawn an Explore agent with your question
+- **Sequential execution of independent tasks** → parallelize with multiple Task calls
+- **Using T2 when agents need each other's output** → that's T3, use a team
+- **Implementing a library API from memory** → tell agents to use Context7
+- **Skipping skill discovery** → scan skills list and invoke relevant ones
+
 ## Self-Check (before every T1+ response)
+- [ ] **Am I dispatching or doing?** Count non-Task tool calls this response. If >2, I'm doing work inline — STOP and spawn an agent.
+- [ ] **Did I call any MCP directly?** If yes for T1+, move the MCP call into the agent prompt.
+- [ ] **Did I edit any implementation files directly?** If yes for T1+, should have been an agent.
 - [ ] Did I scan skills and invoke relevant domain skills? If not → do it now.
-- [ ] Did I run Context7 for every external library? If not → do it now.
 - [ ] Did every agent prompt include the Step 0c block? If not → add it.
 - [ ] Did I pick the right tier? Cross-domain = T3, not T2.
 - [ ] After agents finished: did I run tests? If not → run them now.
