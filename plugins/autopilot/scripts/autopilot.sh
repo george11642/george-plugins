@@ -38,6 +38,10 @@ LOG_FILE=""
 MAX_MILESTONES=0       # 0 = unlimited
 EVOLVE_FOCUS=""        # comma-separated focus areas
 
+# Cost/budget options
+BUDGET_LIMIT=""        # empty = no limit (in USD)
+PHASE_TIMEOUT=1800     # seconds per claude invocation (default: 30min)
+
 
 #=============================================================================
 # Colors
@@ -71,10 +75,12 @@ parse_args() {
             --skip-discuss)  SKIP_DISCUSS=true; shift ;;
             --resume)        RESUME=true; shift ;;
             --dry-run)       DRY_RUN=true; shift ;;
-            --milestones)    MAX_MILESTONES="$2"; shift 2 ;;
-            --focus)         EVOLVE_FOCUS="$2"; shift 2 ;;
-            --help)          show_help; exit 0 ;;
-            *)               log_error "Unknown option: $1"; exit 1 ;;
+            --milestones)      MAX_MILESTONES="$2"; shift 2 ;;
+            --focus)           EVOLVE_FOCUS="$2"; shift 2 ;;
+            --budget)          BUDGET_LIMIT="$2"; shift 2 ;;
+            --phase-timeout)   PHASE_TIMEOUT="$2"; shift 2 ;;
+            --help)            show_help; exit 0 ;;
+            *)                 log_error "Unknown option: $1"; exit 1 ;;
         esac
     done
 
@@ -103,17 +109,25 @@ OPTIONS:
     --milestones N         Max milestones to complete in evolve mode (default: unlimited)
     --focus AREAS          Comma-separated focus areas for evolve strategist
                            e.g., "testing,security" or "performance,reliability"
+    --budget DOLLARS       Stop when estimated cost exceeds this USD amount (default: no limit)
+                           e.g., --budget 5.00
+    --phase-timeout SECS   Timeout per claude invocation in seconds (default: 1800)
+                           e.g., --phase-timeout 3600
     --resume               Resume from existing progress state
     --dry-run              Show what would happen without executing
     --help                 Show this help
 
 MODES (set in .autopilot/mission.json):
-    mission    Default task-based loop
-    improve    Codebase health scan and fix
-    execute    GSD phase execution (requires .planning/)
-    research   Deep research mode
-    evolve     Autonomous milestone generation and execution (NEW)
-               Analyzes codebase → generates milestones → executes each via GSD → repeats
+    mission      Default task-based loop
+    improve      Codebase health scan and fix
+    execute      GSD phase execution (requires .planning/)
+    research     Deep research mode
+    evolve       Autonomous milestone generation and execution
+                 Analyzes codebase → generates milestones → executes each via GSD → repeats
+    build-saas   Fully autonomous SaaS product builder
+                 Phases: market research → scaffold → features → marketing → polish → evolve
+    marketing    Iterative content generation loop
+                 Generates blog posts, social media, pSEO pages continuously
 EOF
 }
 
@@ -355,6 +369,209 @@ PYEOF
 }
 
 #=============================================================================
+# Cost / Budget Tracking
+#=============================================================================
+
+# Source external cost tracker if available (provides additional helpers)
+[[ -f "$HOME/.claude/scripts/cost-tracker.sh" ]] && source "$HOME/.claude/scripts/cost-tracker.sh" || true
+
+COSTS_FILE=""
+
+cost_init() {
+    COSTS_FILE="$AUTOPILOT_DIR/costs.json"
+    if [[ ! -f "$COSTS_FILE" ]]; then
+        cat > "$COSTS_FILE" << 'EOF'
+{
+  "iterations": [],
+  "total_input_tokens": 0,
+  "total_output_tokens": 0,
+  "estimated_cost_usd": 0
+}
+EOF
+        log_info "Initialized costs.json"
+    fi
+}
+
+# track_iteration_cost <log_file_path>
+# Parses token usage from a claude --verbose log and appends to costs.json
+track_iteration_cost() {
+    local log_file="$1"
+    [[ -z "$COSTS_FILE" ]] && COSTS_FILE="$AUTOPILOT_DIR/costs.json"
+    [[ ! -f "$COSTS_FILE" ]] && cost_init
+    [[ ! -f "$log_file"   ]] && return 0
+
+    python3 - "$log_file" "$COSTS_FILE" << 'PYEOF' 2>/dev/null || true
+import json, sys, re, os
+from datetime import datetime, timezone
+
+log_path  = sys.argv[1]
+cost_path = sys.argv[2]
+
+log_text = open(log_path).read()
+
+# Claude --verbose outputs token counts in various formats; try several patterns
+input_tokens  = 0
+output_tokens = 0
+
+# Pattern 1: JSON-style  "input_tokens": 1234
+m = re.search(r'"input_tokens"\s*:\s*(\d+)', log_text)
+if m:
+    input_tokens = int(m.group(1))
+
+m = re.search(r'"output_tokens"\s*:\s*(\d+)', log_text)
+if m:
+    output_tokens = int(m.group(1))
+
+# Pattern 2: plain text  "Input tokens: 1234"
+if not input_tokens:
+    m = re.search(r'[Ii]nput\s+tokens?[:\s]+(\d+)', log_text)
+    if m:
+        input_tokens = int(m.group(1))
+
+if not output_tokens:
+    m = re.search(r'[Oo]utput\s+tokens?[:\s]+(\d+)', log_text)
+    if m:
+        output_tokens = int(m.group(1))
+
+if not input_tokens and not output_tokens:
+    sys.exit(0)  # nothing to record
+
+# Detect model from log (default to Sonnet pricing)
+# Sonnet: $3/$15 per MTok in/out
+# Opus:   $15/$75 per MTok in/out
+# Haiku:  $0.80/$4 per MTok in/out
+if 'opus' in log_text.lower():
+    in_price, out_price = 15.0, 75.0
+elif 'haiku' in log_text.lower():
+    in_price, out_price = 0.80, 4.0
+else:
+    in_price, out_price = 3.0, 15.0  # Sonnet default
+
+iteration_cost = (input_tokens / 1_000_000 * in_price) + (output_tokens / 1_000_000 * out_price)
+
+data = json.load(open(cost_path))
+data["iterations"].append({
+    "log": os.path.basename(log_path),
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "input_tokens":  input_tokens,
+    "output_tokens": output_tokens,
+    "cost_usd":      round(iteration_cost, 6)
+})
+data["total_input_tokens"]  += input_tokens
+data["total_output_tokens"] += output_tokens
+data["estimated_cost_usd"]  = round(data["estimated_cost_usd"] + iteration_cost, 6)
+
+json.dump(data, open(cost_path, "w"), indent=2)
+print(f"Cost tracked: ${iteration_cost:.4f} (in={input_tokens}, out={output_tokens})")
+PYEOF
+    log_info "Cost tracked for $(basename "$log_file")"
+}
+
+# check_budget — returns 1 (stop) if budget exceeded, 0 (continue) otherwise
+check_budget() {
+    [[ -z "$BUDGET_LIMIT" ]] && return 0  # no limit set
+    [[ -z "$COSTS_FILE"   ]] && COSTS_FILE="$AUTOPILOT_DIR/costs.json"
+    [[ ! -f "$COSTS_FILE" ]] && return 0
+
+    python3 - "$COSTS_FILE" "$BUDGET_LIMIT" << 'PYEOF' 2>/dev/null
+import json, sys
+data  = json.load(open(sys.argv[1]))
+limit = float(sys.argv[2])
+spent = data.get("estimated_cost_usd", 0)
+if spent >= limit:
+    print(f"BUDGET_EXCEEDED: ${spent:.4f} spent of ${limit:.2f} limit")
+    sys.exit(1)
+else:
+    print(f"Budget OK: ${spent:.4f} of ${limit:.2f}")
+    sys.exit(0)
+PYEOF
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        local spent
+        spent=$(python3 -c "import json; d=json.load(open('$COSTS_FILE')); print(d.get('estimated_cost_usd',0))" 2>/dev/null || echo "?")
+        log_warn "BUDGET EXCEEDED: \$$spent spent of \$$BUDGET_LIMIT limit — creating STOP file"
+        touch "$AUTOPILOT_DIR/STOP"
+        return 1
+    fi
+    return 0
+}
+
+#=============================================================================
+# Cross-Project Knowledge
+#=============================================================================
+
+GLOBAL_KNOWLEDGE_DIR="$HOME/.claude/autopilot-knowledge"
+
+# Read global knowledge patterns relevant to current project
+read_global_knowledge() {
+    local patterns_file="$GLOBAL_KNOWLEDGE_DIR/patterns.json"
+    [[ ! -f "$patterns_file" ]] && return 0
+
+    python3 - "$patterns_file" << 'PYEOF' 2>/dev/null || true
+import json, sys
+data = json.load(open(sys.argv[1]))
+if not data:
+    sys.exit(0)
+
+print("### Global Knowledge (from previous projects):")
+for category, entries in data.items():
+    if not entries:
+        continue
+    print(f"\n**{category}**:")
+    if isinstance(entries, list):
+        for e in entries[:5]:
+            print(f"- {e}")
+    elif isinstance(entries, dict):
+        for k, v in list(entries.items())[:5]:
+            print(f"- {k}: {v}")
+PYEOF
+}
+
+# write_global_knowledge <category> <key> <value>
+# Appends a pattern to ~/.claude/autopilot-knowledge/<category>.json
+write_global_knowledge() {
+    local category="$1" key="$2" value="$3"
+    mkdir -p "$GLOBAL_KNOWLEDGE_DIR"
+    local cat_file="$GLOBAL_KNOWLEDGE_DIR/${category}.json"
+
+    python3 - "$cat_file" "$key" "$value" << 'PYEOF' 2>/dev/null || true
+import json, sys, os
+path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
+data = {}
+if os.path.exists(path):
+    try:
+        data = json.load(open(path))
+    except Exception:
+        data = {}
+if not isinstance(data, dict):
+    data = {}
+data[key] = val
+json.dump(data, open(path, "w"), indent=2)
+print(f"Global knowledge written: {key}")
+PYEOF
+
+    # Also update the central patterns.json
+    local patterns_file="$GLOBAL_KNOWLEDGE_DIR/patterns.json"
+    python3 - "$patterns_file" "$category" "$key" "$value" << 'PYEOF' 2>/dev/null || true
+import json, sys, os
+path, cat, key, val = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+data = {}
+if os.path.exists(path):
+    try:
+        data = json.load(open(path))
+    except Exception:
+        data = {}
+if cat not in data:
+    data[cat] = {}
+if not isinstance(data[cat], dict):
+    data[cat] = {}
+data[cat][key] = val
+json.dump(data, open(path, "w"), indent=2)
+PYEOF
+    log_info "Global knowledge written: [$category] $key"
+}
+
+#=============================================================================
 # State Management
 #=============================================================================
 
@@ -536,6 +753,12 @@ build_strategist_prompt() {
 
 You are the Autopilot Strategist. Your job is to analyze this codebase and generate prioritized milestones.
 
+## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
 **Project root**: $PROJECT_DIR
 **Is re-evaluation**: $is_reeval
 **Milestones completed so far**: $completed
@@ -582,14 +805,19 @@ run_strategist() {
     mkdir -p "$AUTOPILOT_DIR/iterations"
 
     cd "$PROJECT_DIR"
-    claude -p "$prompt" \
+    local strat_exit=0
+    timeout "$PHASE_TIMEOUT" claude -p "$prompt" \
         --dangerously-skip-permissions \
         --allowedTools '*' \
-        2>&1 | tee "$strat_log" || true
+        2>&1 | tee "$strat_log" || strat_exit=$?
 
-    if ! grep -q "AUTOPILOT_STATUS: STRATEGIST_COMPLETE" "$strat_log" 2>/dev/null; then
+    if [[ $strat_exit -eq 124 ]]; then
+        log_warn "TIMEOUT: Strategist exceeded ${PHASE_TIMEOUT}s limit — using whatever milestones were generated"
+    elif ! grep -q "AUTOPILOT_STATUS: STRATEGIST_COMPLETE" "$strat_log" 2>/dev/null; then
         log_warn "Strategist did not signal completion — continuing anyway"
     fi
+
+    track_iteration_cost "$strat_log"
 
     local pending; pending=$(evolve_get_pending_count)
     log_info "Strategist complete — $pending milestones pending"
@@ -645,10 +873,17 @@ run_new_milestone() {
     mkdir -p "$AUTOPILOT_DIR/iterations"
 
     cd "$PROJECT_DIR"
-    claude -p "$prompt" \
+    local setup_exit=0
+    timeout "$PHASE_TIMEOUT" claude -p "$prompt" \
         --dangerously-skip-permissions \
         --allowedTools '*' \
-        2>&1 | tee "$setup_log" || true
+        2>&1 | tee "$setup_log" || setup_exit=$?
+
+    if [[ $setup_exit -eq 124 ]]; then
+        log_warn "TIMEOUT: Milestone setup exceeded ${PHASE_TIMEOUT}s limit — proceeding with partial setup"
+    fi
+
+    track_iteration_cost "$setup_log"
 
     # Extract planning path from output
     local planning_path
@@ -875,6 +1110,10 @@ evolve_main_loop() {
         local done_count; done_count=$(evolve_get_completed_count)
         log_success "Milestone $milestone_count complete! (Total completed: $done_count)"
 
+        # Write milestone completion pattern to global cross-project knowledge
+        write_global_knowledge "milestones" "$ms_title" "completed in project: $PROJECT_DIR"
+        check_budget || break
+
         if evolve_should_stop; then break; fi
 
         # Re-run strategist to reprioritize remaining milestones
@@ -918,6 +1157,10 @@ build_iteration_prompt() {
     local learning_context
     learning_context=$(learning_read_context 2>/dev/null || echo "No prior learning data.")
 
+    # Read cross-project global knowledge
+    local global_context
+    global_context=$(read_global_knowledge 2>/dev/null || echo "No global knowledge available.")
+
     # Build iteration start timestamp for learning record
     local iter_start_ts
     iter_start_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -946,6 +1189,20 @@ The following is structured knowledge accumulated from previous iterations.
 Use it to avoid repeated mistakes and reuse successful approaches.
 
 $learning_context
+
+### GLOBAL PROJECT KNOWLEDGE
+$global_context
+
+## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
+## Context Management
+If you've used more than 30 tool calls in this iteration, save progress immediately and output:
+AUTOPILOT_STATUS: CONTEXT_LIMIT
+This prevents context window exhaustion.
 
 ### TASK LIST (from .autopilot/progress.json)
 $progress_content
@@ -1065,13 +1322,25 @@ run_iteration() {
 
     cd "$PROJECT_DIR"
 
-    # Run Claude with fresh context
+    # Run Claude with fresh context (wrapped in timeout watchdog)
     local exit_code=0
-    claude -p "$prompt" \
+    timeout "$PHASE_TIMEOUT" claude -p "$prompt" \
         --dangerously-skip-permissions \
         --verbose \
         --allowedTools '*' \
         2>&1 | tee "$iteration_log" || exit_code=$?
+
+    if [[ $exit_code -eq 124 ]]; then
+        log_warn "TIMEOUT: Claude process exceeded ${PHASE_TIMEOUT}s limit in iteration $ITERATION — treating as stuck iteration"
+        echo "[AUTOPILOT] Iteration $ITERATION timed out after ${PHASE_TIMEOUT}s" >> "$iteration_log"
+        # Don't stop — let the next iteration continue with remaining tasks
+        aggregate_patterns
+        generate_handoff_from_learning
+        return 0
+    fi
+
+    # Track cost after invocation
+    track_iteration_cost "$iteration_log"
 
     # Parse output for status signals
     if grep -q "AUTOPILOT_STATUS: MISSION_COMPLETE" "$iteration_log" 2>/dev/null; then
@@ -1093,11 +1362,305 @@ run_iteration() {
         # Don't stop — let the next iteration try the next task
     fi
 
+    if grep -q "AUTOPILOT_STATUS: CONTEXT_LIMIT" "$iteration_log" 2>/dev/null; then
+        log_warn "Context limit reached in iteration $ITERATION — progress saved, continuing next iteration"
+        # Treat like ITERATION_COMPLETE: aggregate and handoff, then loop continues
+    fi
+
     # Post-iteration learning: aggregate patterns and regenerate handoff.md
     aggregate_patterns
     generate_handoff_from_learning
 
     return 0
+}
+
+#=============================================================================
+# Build-SaaS Mode — Fully Autonomous SaaS Product Builder
+#=============================================================================
+
+build_saas_main_loop() {
+    local description="$1"
+
+    log_info "Build-SaaS Mode — autonomous SaaS product builder"
+    log_info "Product: $description"
+
+    mkdir -p "$AUTOPILOT_DIR/iterations"
+
+    # Phase 0: Market Research
+    log_phase "=== PHASE 0: Market Research ==="
+    local research_prompt="## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
+You are a SaaS market researcher. Your task:
+1. WebSearch for competitors in this space: $description
+2. Identify 5-10 competitors. For each: features, pricing, user complaints
+3. Categorize: Table Stakes (must-have), Differentiators (stand-out), Anti-Features (avoid)
+4. Recommend: pricing model, MVP feature set, tech stack
+5. Write findings to .autopilot/saas-research.md
+Output: AUTOPILOT_STATUS: RESEARCH_COMPLETE"
+
+    local phase0_log="$AUTOPILOT_DIR/iterations/phase-0-research.log"
+    local phase0_exit=0
+    timeout "$PHASE_TIMEOUT" claude -p "$research_prompt" \
+        --dangerously-skip-permissions --verbose --allowedTools '*' \
+        2>&1 | tee "$phase0_log" || phase0_exit=$?
+
+    if [[ $phase0_exit -eq 124 ]]; then
+        log_warn "TIMEOUT: Market research exceeded ${PHASE_TIMEOUT}s — proceeding with partial research"
+    fi
+    track_iteration_cost "$phase0_log"
+    check_budget || return 1
+
+    # Phase 1: Scaffold & Deploy
+    log_phase "=== PHASE 1: Scaffold & Deploy ==="
+    local scaffold_prompt="## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
+You are a SaaS builder. Read .autopilot/saas-research.md for context.
+1. Create a Next.js 15 project with: Tailwind CSS, TypeScript
+2. Set up authentication with Clerk (use env vars from ~/.claude/account-inventory.json if exists)
+3. Set up database with Convex
+4. Set up payments with Stripe (products, prices, checkout)
+5. Create landing page with value prop from research
+6. Deploy to Vercel
+7. Write deployment info to .autopilot/deployment.json
+Product: $description
+Output: AUTOPILOT_STATUS: SCAFFOLD_COMPLETE"
+
+    local phase1_log="$AUTOPILOT_DIR/iterations/phase-1-scaffold.log"
+    local phase1_exit=0
+    timeout "$PHASE_TIMEOUT" claude -p "$scaffold_prompt" \
+        --dangerously-skip-permissions --verbose --allowedTools '*' \
+        2>&1 | tee "$phase1_log" || phase1_exit=$?
+
+    if [[ $phase1_exit -eq 124 ]]; then
+        log_warn "TIMEOUT: Scaffold phase exceeded ${PHASE_TIMEOUT}s"
+    fi
+    track_iteration_cost "$phase1_log"
+    check_budget || return 1
+
+    # Phase 2: Core Features (via GSD)
+    log_phase "=== PHASE 2: Core Features ==="
+    local features_prompt="## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
+You are building a SaaS product. Read .autopilot/saas-research.md.
+1. Run /gsd:new-milestone to create a milestone for building all core features
+2. The roadmap should include: all Table Stakes features, top 3 Differentiators
+3. Each feature should be a separate phase with proper dependencies
+Product: $description
+Output: AUTOPILOT_STATUS: MILESTONE_SETUP_COMPLETE"
+
+    local phase2_log="$AUTOPILOT_DIR/iterations/phase-2-features-setup.log"
+    local phase2_exit=0
+    timeout $((PHASE_TIMEOUT * 2)) claude -p "$features_prompt" \
+        --dangerously-skip-permissions --verbose --allowedTools '*' \
+        2>&1 | tee "$phase2_log" || phase2_exit=$?
+
+    if [[ $phase2_exit -eq 124 ]]; then
+        log_warn "TIMEOUT: Features setup exceeded $((PHASE_TIMEOUT * 2))s"
+    fi
+
+    # Execute core features via ralph-gsd
+    gsd_main_loop
+    local gsd_exit=$?
+    track_iteration_cost "$AUTOPILOT_DIR/ralph-gsd.log"
+    check_budget || return 1
+    [[ $gsd_exit -ne 0 ]] && log_warn "GSD exited with code $gsd_exit"
+
+    # Phase 3: Marketing & SEO
+    log_phase "=== PHASE 3: Marketing & SEO ==="
+    local marketing_prompt="## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
+You are a marketing agent for a SaaS product.
+Read .autopilot/saas-research.md and the project README.
+1. Generate 3 blog posts about the product (write to blog/ or content/ dir)
+2. Generate SEO meta tags for all pages
+3. Set up PostHog analytics (add tracking code)
+4. Set up Sentry error monitoring
+5. Generate Terms of Service and Privacy Policy (use legal-doc-generator agent if available)
+6. Deploy updates to Vercel
+Product: $description
+Output: AUTOPILOT_STATUS: MARKETING_COMPLETE"
+
+    local phase3_log="$AUTOPILOT_DIR/iterations/phase-3-marketing.log"
+    local phase3_exit=0
+    timeout "$PHASE_TIMEOUT" claude -p "$marketing_prompt" \
+        --dangerously-skip-permissions --verbose --allowedTools '*' \
+        2>&1 | tee "$phase3_log" || phase3_exit=$?
+
+    if [[ $phase3_exit -eq 124 ]]; then
+        log_warn "TIMEOUT: Marketing phase exceeded ${PHASE_TIMEOUT}s"
+    fi
+    track_iteration_cost "$phase3_log"
+    check_budget || return 1
+
+    # Phase 4: Polish & Launch
+    log_phase "=== PHASE 4: Polish & Launch ==="
+    local polish_prompt="## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
+You are polishing a SaaS product for launch.
+1. Check Sentry for any errors — fix them
+2. Run Lighthouse audit — fix performance issues
+3. Run accessibility audit — fix a11y issues
+4. Check all user flows work end-to-end
+5. Final deploy to Vercel
+Output: AUTOPILOT_STATUS: POLISH_COMPLETE"
+
+    local phase4_log="$AUTOPILOT_DIR/iterations/phase-4-polish.log"
+    local phase4_exit=0
+    timeout "$PHASE_TIMEOUT" claude -p "$polish_prompt" \
+        --dangerously-skip-permissions --verbose --allowedTools '*' \
+        2>&1 | tee "$phase4_log" || phase4_exit=$?
+
+    if [[ $phase4_exit -eq 124 ]]; then
+        log_warn "TIMEOUT: Polish phase exceeded ${PHASE_TIMEOUT}s"
+    fi
+    track_iteration_cost "$phase4_log"
+
+    # Phase 5: Transition to evolve for continuous improvement
+    log_phase "=== PHASE 5: Continuous Improvement ==="
+    log_info "Build-SaaS complete. Transitioning to evolve mode for continuous improvement."
+    sed -i 's/"mode"[[:space:]]*:[[:space:]]*"build-saas"/"mode": "evolve"/' "$AUTOPILOT_DIR/mission.json"
+    evolve_main_loop
+}
+
+#=============================================================================
+# Marketing Mode — Iterative Content Generation Loop
+#=============================================================================
+
+marketing_main_loop() {
+    log_info "Marketing Mode — iterative content generation loop"
+
+    mkdir -p "$AUTOPILOT_DIR/iterations"
+
+    # Initialize content tracking in learning.json if not present
+    if [[ -f "$AUTOPILOT_DIR/learning.json" ]]; then
+        python3 - "$AUTOPILOT_DIR/learning.json" << 'PYEOF' 2>/dev/null || true
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+if "content_generated" not in data:
+    data["content_generated"] = {
+        "blog_posts": [],
+        "social_posts": [],
+        "seo_pages": []
+    }
+    json.dump(data, open(path, "w"), indent=2)
+    print("Content tracking initialized in learning.json")
+PYEOF
+    fi
+
+    local content_iteration=0
+
+    while ! should_stop; do
+        check_budget || break
+
+        content_iteration=$((content_iteration + 1))
+        ITERATION=$((ITERATION + 1))
+
+        log_phase "Marketing Iteration $content_iteration"
+
+        # Read what content has already been generated
+        local content_history=""
+        if [[ -f "$AUTOPILOT_DIR/learning.json" ]]; then
+            content_history=$(python3 - "$AUTOPILOT_DIR/learning.json" << 'PYEOF' 2>/dev/null || echo "No prior content.")
+import json, sys
+data = json.load(open(sys.argv[1]))
+cg = data.get("content_generated", {})
+lines = []
+for ctype, items in cg.items():
+    if items:
+        lines.append(f"{ctype}: {len(items)} items generated")
+        for item in items[-3:]:
+            lines.append(f"  - {item}")
+print("\n".join(lines) if lines else "No prior content.")
+PYEOF
+        fi
+
+        local marketing_prompt="## Pre-Flight (MANDATORY)
+Before implementing ANY task:
+1. Scan your available skills list and invoke domain-relevant skills
+2. Use Context7 MCP (resolve-library-id → query-docs) for any library APIs
+3. For unfamiliar domains, use WebSearch to research best practices first
+
+You are a content marketing agent running iteration $content_iteration.
+Project root: $PROJECT_DIR
+
+## Content Already Generated
+$content_history
+
+## Your Task This Iteration
+1. Analyze the product (read README, landing page, existing content)
+2. Identify the highest-value content gap (blog post, social content, or pSEO page)
+3. Research what performs well in this niche (use WebSearch)
+4. Generate ONE piece of high-quality content:
+   - Blog post: write to content/blog/ or posts/ directory (1500-2500 words, SEO-optimized)
+   - Social media: write to content/social/ (Twitter thread OR LinkedIn post)
+   - pSEO page: write to app/pages/ or pages/ (programmatic SEO targeting a long-tail keyword)
+5. Commit the new content
+6. Update .autopilot/learning.json — append to content_generated.<type> array with title/path/date
+7. If applicable, deploy updates to Vercel
+
+## Content Standards
+- Every piece must target a specific keyword or audience segment
+- Blog posts: include H2/H3 headings, meta description, call-to-action
+- Social posts: include hashtags, emojis where appropriate, hook in first line
+- pSEO pages: include structured data markup (JSON-LD), unique value per page
+
+Output: AUTOPILOT_STATUS: ITERATION_COMPLETE"
+
+        local mkt_log="$AUTOPILOT_DIR/iterations/marketing-${content_iteration}.log"
+        local mkt_exit=0
+        timeout "$PHASE_TIMEOUT" claude -p "$marketing_prompt" \
+            --dangerously-skip-permissions --verbose --allowedTools '*' \
+            2>&1 | tee "$mkt_log" || mkt_exit=$?
+
+        if [[ $mkt_exit -eq 124 ]]; then
+            log_warn "TIMEOUT: Marketing iteration $content_iteration exceeded ${PHASE_TIMEOUT}s"
+        fi
+
+        track_iteration_cost "$mkt_log"
+
+        if grep -q "AUTOPILOT_STATUS: MISSION_COMPLETE" "$mkt_log" 2>/dev/null; then
+            log_success "Marketing mission complete!"
+            sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "complete"/' "$AUTOPILOT_DIR/mission.json"
+            break
+        fi
+
+        aggregate_patterns
+        generate_handoff_from_learning
+
+        sleep 3
+    done
+
+    local total_items=0
+    if [[ -f "$AUTOPILOT_DIR/learning.json" ]]; then
+        total_items=$(python3 - "$AUTOPILOT_DIR/learning.json" << 'PYEOF' 2>/dev/null || echo "0")
+import json, sys
+data = json.load(open(sys.argv[1]))
+cg = data.get("content_generated", {})
+print(sum(len(v) for v in cg.values() if isinstance(v, list)))
+PYEOF
+    fi
+    log_success "Marketing session ended — $total_items content pieces generated across $content_iteration iterations"
 }
 
 #=============================================================================
@@ -1123,9 +1686,14 @@ main() {
     log_info "Max iterations: $MAX_ITERATIONS"
     log_info "Time limit: ${MAX_HOURS}h"
     log_info "Project: $PROJECT_DIR"
+    [[ -n "$BUDGET_LIMIT" ]] && log_info "Budget limit: \$$BUDGET_LIMIT"
+    log_info "Phase timeout: ${PHASE_TIMEOUT}s"
 
     # Initialize learning system (no-op if already exists)
     learning_init
+
+    # Initialize cost tracking
+    cost_init
 
     # Resume from previous state
     if [[ "$RESUME" == true ]]; then
@@ -1145,9 +1713,20 @@ main() {
     elif [[ "$mode" == "execute" ]]; then
         # GSD Execute Mode — uses actual GSD agents and commands
         gsd_main_loop
+    elif [[ "$mode" == "build-saas" ]]; then
+        # Build-SaaS Mode — fully autonomous SaaS product builder
+        local saas_desc
+        saas_desc=$(get_mission)
+        build_saas_main_loop "$saas_desc"
+    elif [[ "$mode" == "marketing" ]]; then
+        # Marketing Mode — iterative content generation loop
+        marketing_main_loop
     else
         # Mission/Improve/Research — autopilot's own task loop
         while ! should_stop; do
+            # Check budget before starting new iteration
+            check_budget || break
+
             ITERATION=$((ITERATION + 1))
 
             local iteration_start
@@ -1181,6 +1760,13 @@ main() {
     log_info "Tasks completed: $completed / $total"
     log_info "Status: $(get_status)"
     log_info "Log: $LOG_FILE"
+
+    # Print cost summary if costs.json exists
+    if [[ -f "$AUTOPILOT_DIR/costs.json" ]]; then
+        local total_cost
+        total_cost=$(python3 -c "import json; d=json.load(open('$AUTOPILOT_DIR/costs.json')); print(f\"\${d.get('estimated_cost_usd',0):.4f}\")" 2>/dev/null || echo "?")
+        log_info "Estimated cost: \$$total_cost"
+    fi
 
     # Clean up
     rm -f "$AUTOPILOT_DIR/STOP"

@@ -30,6 +30,9 @@
 
 set -euo pipefail
 
+# Source cost tracker if available
+[[ -f "$HOME/.claude/scripts/cost-tracker.sh" ]] && source "$HOME/.claude/scripts/cost-tracker.sh"
+
 #=============================================================================
 # Configuration
 #=============================================================================
@@ -45,6 +48,8 @@ DRY_RUN=false
 RESUME=false
 STOP_FILE_EXTERNAL=""
 ITERATION=0
+PHASE_TIMEOUT="${PHASE_TIMEOUT:-1800}"
+SKIP_EVALUATOR=false
 
 # Exit code constants
 EXIT_COMPLETE=0
@@ -169,6 +174,9 @@ OPTIONS:
                           restarting after a stop without re-running completed work.
     --log-file PATH       Redirect log output to this path instead of the default
                           .planning/ralph-gsd.log
+    --phase-timeout N     Seconds before a single claude invocation is killed
+                          (default: 1800). Also honoured via PHASE_TIMEOUT env var.
+    --skip-evaluator      Skip the post-milestone code-quality evaluator pass
     --help                Show this help message
     --version             Show version information
 
@@ -285,6 +293,14 @@ parse_args() {
             --log-file)
                 LOG_FILE="$2"
                 shift 2
+                ;;
+            --phase-timeout)
+                PHASE_TIMEOUT="$2"
+                shift 2
+                ;;
+            --skip-evaluator)
+                SKIP_EVALUATOR=true
+                shift
                 ;;
             --help)
                 show_help
@@ -840,15 +856,21 @@ run_gsd_command_parallel() {
 
     cd "$PROJECT_DIR"
 
-    if env -u CLAUDECODE claude -p "$prompt" \
+    timeout $PHASE_TIMEOUT env -u CLAUDECODE claude -p "$prompt" \
         --dangerously-skip-permissions \
         --verbose \
         --output-format stream-json \
-        --allowedTools '*' >> "$logfile" 2>&1; then
+        --allowedTools '*' >> "$logfile" 2>&1
+    local exit_code=$?
+
+    if [[ $exit_code -eq 124 ]]; then
+        echo "[WARN] $(date '+%Y-%m-%d %H:%M:%S') PHASE TIMED OUT after ${PHASE_TIMEOUT}s: /gsd:$gsd_command" >> "$logfile"
+        PHASE_STUCK_COUNT["$phase"]=$(( ${PHASE_STUCK_COUNT[$phase]:-0} + 1 ))
+        return $exit_code
+    elif [[ $exit_code -eq 0 ]]; then
         echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') Command completed: /gsd:$gsd_command" >> "$logfile"
         return 0
     else
-        local exit_code=$?
         echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') Command failed: /gsd:$gsd_command" >> "$logfile"
         return $exit_code
     fi
@@ -918,17 +940,23 @@ run_gsd_command() {
     # Using stream-json for real-time output parsing
     cd "$PROJECT_DIR"
 
-    if env -u CLAUDECODE claude -p "$prompt" \
+    timeout $PHASE_TIMEOUT env -u CLAUDECODE claude -p "$prompt" \
         --dangerously-skip-permissions \
         --verbose \
         --output-format stream-json \
         --allowedTools '*' \
-        2>&1 | tee "$temp_output" | parse_claude_output; then
+        2>&1 | tee "$temp_output" | parse_claude_output
+    local exit_code=${PIPESTATUS[0]}
+
+    if [[ $exit_code -eq 124 ]]; then
+        log_warn "PHASE TIMED OUT after ${PHASE_TIMEOUT}s: /gsd:$gsd_command"
+        rm -f "$temp_output"
+        return $exit_code
+    elif [[ $exit_code -eq 0 ]]; then
         log_success "Command completed: /gsd:$gsd_command"
         rm -f "$temp_output"
         return 0
     else
-        local exit_code=$?
         log_error "Command failed: /gsd:$gsd_command"
 
         # Check for specific error patterns
@@ -998,6 +1026,87 @@ parse_claude_output() {
     # Even if we didn't see explicit completion, check if the command succeeded
     # by examining the state files
     return 0
+}
+
+#=============================================================================
+# Test Detection and Git Checkpoint / Rollback
+#=============================================================================
+
+detect_test_command() {
+    local dir="${1:-.}"
+    if [[ -f "$dir/package.json" ]]; then
+        if grep -q '"test"' "$dir/package.json" 2>/dev/null; then
+            local test_cmd
+            test_cmd=$(python3 -c "import json; d=json.load(open('$dir/package.json')); print(d.get('scripts',{}).get('test',''))" 2>/dev/null)
+            if [[ -n "$test_cmd" && "$test_cmd" != *"Error: no test specified"* ]]; then
+                echo "cd '$dir' && npm test"
+                return 0
+            fi
+        fi
+    fi
+    if [[ -f "$dir/bun.lockb" || -f "$dir/bunfig.toml" ]]; then
+        echo "cd '$dir' && bun test"
+        return 0
+    fi
+    if [[ -f "$dir/pyproject.toml" ]] || [[ -f "$dir/pytest.ini" ]]; then
+        echo "cd '$dir' && python -m pytest"
+        return 0
+    fi
+    if [[ -f "$dir/Cargo.toml" ]]; then
+        echo "cd '$dir' && cargo test"
+        return 0
+    fi
+    if [[ -f "$dir/go.mod" ]]; then
+        echo "cd '$dir' && go test ./..."
+        return 0
+    fi
+    return 1
+}
+
+checkpoint_phase() {
+    local phase="$1"
+    local tag="pre-phase-${phase}-$(date +%s)"
+    git -C "$PROJECT_DIR" tag "$tag" 2>/dev/null && echo "$tag"
+}
+
+rollback_phase() {
+    local phase="$1"
+    local tag="$2"
+    if [[ -n "$tag" ]] && git -C "$PROJECT_DIR" rev-parse "$tag" >/dev/null 2>&1; then
+        log_warn "Rolling back phase $phase to checkpoint $tag"
+        git -C "$PROJECT_DIR" reset --hard "$tag" 2>/dev/null
+        return $?
+    fi
+    return 1
+}
+
+run_tests() {
+    local project_dir="${1:-.}"
+    local test_cmd
+    test_cmd=$(detect_test_command "$project_dir") || return 0  # No tests = pass
+    log_info "Running tests: $test_cmd"
+    if timeout 300 bash -c "$test_cmd" >/dev/null 2>&1; then
+        log_info "Tests PASSED"
+        return 0
+    else
+        log_warn "Tests FAILED"
+        return 1
+    fi
+}
+
+#=============================================================================
+# Cost Tracking
+#=============================================================================
+
+track_command_cost() {
+    local phase="$1" action="$2" log_file="$3"
+    local cost_file="${PROJECT_DIR}/.planning/ralph-gsd-costs.json"
+    if type cost_append &>/dev/null && [[ -f "$log_file" ]]; then
+        local input_tokens output_tokens
+        input_tokens=$(grep -oP '"input_tokens":\s*\K\d+' "$log_file" | tail -1)
+        output_tokens=$(grep -oP '"output_tokens":\s*\K\d+' "$log_file" | tail -1)
+        cost_append "$cost_file" "phase-${phase}-${action}" "${input_tokens:-0}" "${output_tokens:-0}" "sonnet"
+    fi
 }
 
 #=============================================================================
@@ -1112,10 +1221,37 @@ main_loop() {
 
             log_info "Action: /gsd:$action"
 
+            # Checkpoint before execute-phase so we can roll back on test failure
+            local checkpoint_tag=""
+            if [[ "$action" == *"execute-phase"* ]]; then
+                checkpoint_tag=$(checkpoint_phase "$phase") || true
+            fi
+
             # Run the GSD command with terminal output
-            if ! run_gsd_command "$action"; then
+            local cmd_exit=0
+            run_gsd_command "$action" || cmd_exit=$?
+
+            # Track cost using last temp log approximation via LOG_FILE
+            track_command_cost "$phase" "$action" "$LOG_FILE"
+
+            if [[ $cmd_exit -eq 124 ]]; then
+                log_warn "Phase $phase timed out — incrementing stuck counter"
+                PHASE_STUCK_COUNT["$phase"]=$(( ${PHASE_STUCK_COUNT[$phase]:-0} + 1 ))
+            elif [[ $cmd_exit -ne 0 ]]; then
                 log_error "Command failed for phase $phase"
                 # Don't break - continue with other phases
+            fi
+
+            # Post-execute test gate with rollback
+            if [[ "$action" == *"execute-phase"* ]]; then
+                if ! run_tests "$PROJECT_DIR"; then
+                    if [[ -n "$checkpoint_tag" ]]; then
+                        rollback_phase "$phase" "$checkpoint_tag"
+                        PHASE_STUCK_COUNT["$phase"]=$(( ${PHASE_STUCK_COUNT[$phase]:-0} + 1 ))
+                        log_warn "Phase $phase rolled back due to test failure. Will re-plan."
+                        continue
+                    fi
+                fi
             fi
 
         # Parallel execution for multiple phases
@@ -1178,6 +1314,14 @@ main_loop() {
 
                 # Merge logs and extract deferred items
                 merge_phase_logs
+
+                # Track cost for each parallel phase log
+                for pa in "${phase_actions[@]}"; do
+                    local pa_phase="${pa%%:*}"
+                    local pa_action="${pa#*:}"
+                    local pa_logfile="$PARALLEL_LOG_DIR/phase-${pa_phase}.log"
+                    track_command_cost "$pa_phase" "$pa_action" "$pa_logfile"
+                done
 
                 # Clean up log directory
                 rm -rf "$PARALLEL_LOG_DIR"/*.log
@@ -1251,6 +1395,53 @@ main_loop() {
     # Remove STOP files on graceful stop so a --resume run can proceed
     if [[ "$exit_reason" == "stopped" ]]; then
         cleanup_stop_files
+    fi
+
+    # Post-milestone evaluator gate
+    if [[ "$exit_reason" == "complete" ]] && [[ "$SKIP_EVALUATOR" != "true" ]]; then
+        log_info "=== Running post-milestone evaluator ==="
+        local eval_prompt="You are an independent code evaluator. Review ALL changes in the current git log (last 50 commits or since the last milestone tag).
+
+Check for:
+1. Security vulnerabilities (OWASP Top 10, hardcoded secrets, injection risks)
+2. Test coverage gaps (new features without tests)
+3. Code quality issues (dead code, duplicated logic, overly complex functions)
+4. Unused dependencies
+5. Performance concerns (N+1 queries, missing indexes, large bundle sizes)
+
+For each finding, output:
+- SEVERITY: CRITICAL | HIGH | MEDIUM | LOW
+- FILE: path
+- ISSUE: description
+- SUGGESTION: fix
+
+At the end, output either:
+EVALUATOR_STATUS: PASSED (no critical/high issues)
+EVALUATOR_STATUS: ISSUES_FOUND (has critical/high issues)
+
+Always output the full list of findings regardless of status."
+
+        local eval_log="$PROJECT_DIR/.planning/evaluator-$(date +%s).log"
+        timeout $PHASE_TIMEOUT env -u CLAUDECODE claude -p "$eval_prompt" \
+            --dangerously-skip-permissions --verbose --allowedTools '*' \
+            2>&1 | tee "$eval_log"
+
+        if grep -q "EVALUATOR_STATUS: ISSUES_FOUND" "$eval_log"; then
+            log_warn "Evaluator found issues — see $eval_log"
+            echo -e "\n## Evaluator Findings ($(date))\n" >> "${PROJECT_DIR}/.planning/DEFERRED.md"
+            grep -A2 "SEVERITY:" "$eval_log" >> "${PROJECT_DIR}/.planning/DEFERRED.md" 2>/dev/null
+        else
+            log_info "Evaluator: PASSED"
+        fi
+    fi
+
+    # Print cost summary if tracker is available
+    if type cost_total &>/dev/null; then
+        local cost_file="${PROJECT_DIR}/.planning/ralph-gsd-costs.json"
+        if [[ -f "$cost_file" ]]; then
+            log_info "=== Cost Summary ==="
+            cost_total "$cost_file"
+        fi
     fi
 
     ralph_exit "$final_code" "$phases_complete" "$phases_total" "${RALPH_CURRENT_PHASE:-none}"

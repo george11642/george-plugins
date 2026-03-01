@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "description": "Deployment recipes learned from successful deployments",
+  "recipes": {
+    "nextjs-vercel": {
+      "steps": [
+        "vercel link (if not linked)",
+        "vercel env pull .env.local",
+        "vercel --prebuilt --yes",
+        "vercel promote (for production)"
+      ],
+      "gotchas": [],
+      "env_vars_needed": ["VERCEL_TOKEN"]
+    }
+  },
+  "last_updated": null
+}

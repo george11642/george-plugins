@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "description": "Preferred technology stacks and configurations",
+  "preferred": {
+    "frontend": "Next.js 15 + TypeScript + Tailwind CSS",
+    "database": "Convex",
+    "auth": "Clerk",
+    "payments": "Stripe",
+    "hosting": "Vercel",
+    "analytics": "PostHog",
+    "errors": "Sentry",
+    "styling": "Tailwind CSS + shadcn/ui"
+  },
+  "avoided": {},
+  "overrides": {},
+  "last_updated": null
+}

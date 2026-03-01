@@ -1,0 +1,95 @@
+{
+  "$schema": "Account inventory for autonomous SaaS operations",
+  "version": "1.0.0",
+  "last_updated": null,
+  "services": {
+    "stripe": {
+      "profile": "default",
+      "env_vars": ["STRIPE_SECRET_KEY", "STRIPE_PUBLISHABLE_KEY", "STRIPE_WEBHOOK_SECRET"],
+      "kyc_verified": false,
+      "auth_method": "api_key",
+      "dashboard_url": "https://dashboard.stripe.com",
+      "last_verified": null,
+      "notes": "KYC verification required before accepting live payments"
+    },
+    "vercel": {
+      "profile": "default",
+      "env_vars": ["VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID"],
+      "auth_method": "token",
+      "dashboard_url": "https://vercel.com/dashboard",
+      "last_verified": null,
+      "notes": ""
+    },
+    "clerk": {
+      "profile": "default",
+      "env_vars": ["NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "CLERK_SECRET_KEY"],
+      "auth_method": "api_key",
+      "dashboard_url": "https://dashboard.clerk.com",
+      "last_verified": null,
+      "notes": ""
+    },
+    "convex": {
+      "profile": "default",
+      "env_vars": ["CONVEX_DEPLOY_KEY", "NEXT_PUBLIC_CONVEX_URL"],
+      "auth_method": "deploy_key",
+      "dashboard_url": "https://dashboard.convex.dev",
+      "last_verified": null,
+      "notes": ""
+    },
+    "sentry": {
+      "profile": "default",
+      "env_vars": ["SENTRY_DSN", "SENTRY_AUTH_TOKEN", "SENTRY_ORG", "SENTRY_PROJECT"],
+      "auth_method": "token",
+      "dashboard_url": "https://sentry.io",
+      "last_verified": null,
+      "notes": ""
+    },
+    "posthog": {
+      "profile": "default",
+      "env_vars": ["NEXT_PUBLIC_POSTHOG_KEY", "NEXT_PUBLIC_POSTHOG_HOST"],
+      "auth_method": "api_key",
+      "dashboard_url": "https://us.posthog.com",
+      "last_verified": null,
+      "notes": ""
+    },
+    "github": {
+      "auth_method": "gh_cli",
+      "env_vars": ["GITHUB_TOKEN"],
+      "last_verified": null,
+      "notes": "Authenticated via gh CLI"
+    },
+    "domain_registrar": {
+      "profile": "default",
+      "env_vars": [],
+      "auth_method": "browser",
+      "last_verified": null,
+      "notes": "Domain purchase requires manual browser session"
+    }
+  },
+  "chrome_profiles": {
+    "default": {
+      "description": "Main Chrome profile with authenticated sessions",
+      "services_logged_in": []
+    }
+  },
+  "human_gates": {
+    "stripe_kyc": {
+      "status": "pending",
+      "required_for": "live payments",
+      "instructions": "Complete Stripe identity verification at https://dashboard.stripe.com/account/onboarding",
+      "completed_at": null
+    },
+    "domain_purchase": {
+      "status": "pending",
+      "required_for": "custom domain",
+      "instructions": "Purchase domain and configure DNS to point to Vercel",
+      "completed_at": null
+    },
+    "app_store_accounts": {
+      "status": "pending",
+      "required_for": "mobile app distribution",
+      "instructions": "Create Apple Developer ($99/yr) and Google Play ($25) accounts",
+      "completed_at": null
+    }
+  }
+}

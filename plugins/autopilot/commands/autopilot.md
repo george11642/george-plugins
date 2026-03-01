@@ -1,7 +1,7 @@
 ---
 name: autopilot
-description: "Start autonomous coding loop. Modes: mission (default), improve, execute, research, evolve."
-argument-hint: '"mission description" [--mode mission|improve|execute|research|evolve] [--hours N] [--max-iterations N] [--parallel N] [--milestones N] [--focus "areas"] [--dry-run]'
+description: "Start autonomous coding loop. Modes: mission (default), improve, execute, research, evolve, build-saas, marketing."
+argument-hint: '"mission description" [--mode mission|improve|execute|research|evolve|build-saas|marketing] [--hours N] [--max-iterations N] [--parallel N] [--milestones N] [--focus "areas"] [--budget DOLLARS] [--phase-timeout SECS] [--dry-run]'
 ---
 
 # /autopilot — Autonomous Overnight Coding Agent
@@ -13,8 +13,8 @@ Start a fully autonomous coding loop that runs for hours without human intervent
 ### 1. Parse arguments
 
 Extract from `$ARGUMENTS`:
-- **Mission text**: The quoted string (required for mission/research modes; optional for evolve/improve)
-- `--mode`: `mission` (default) | `improve` | `execute` | `research` | `evolve`
+- **Mission text**: The quoted string (required for mission/research/build-saas modes; optional for evolve/improve/marketing)
+- `--mode`: `mission` (default) | `improve` | `execute` | `research` | `evolve` | `build-saas` | `marketing`
 - `--hours`: Max runtime in hours (default: 8)
 - `--max-iterations`: Safety limit per session (default: 50)
 - `--parallel`: Max parallel subagents per iteration (default: 3)
@@ -24,6 +24,10 @@ Extract from `$ARGUMENTS`:
 - `--milestones N`: In evolve mode, max milestones to complete (default: unlimited)
 - `--focus AREAS`: In evolve mode, comma-separated focus areas for the strategist
   e.g., `"testing,security"` or `"performance,reliability,observability"`
+- `--budget DOLLARS`: Stop when estimated API cost exceeds this USD amount (default: no limit)
+  e.g., `--budget 5.00` stops after $5 of estimated spend
+- `--phase-timeout SECS`: Timeout per claude invocation in seconds (default: 1800 = 30 min)
+  e.g., `--phase-timeout 3600` for 1-hour timeout per phase
 - `--dry-run`: Preview what would happen
 
 If no arguments provided, ask the user what they want to accomplish.
@@ -81,6 +85,8 @@ Before starting the loop, do a quick codebase scan:
    - **execute**: Delegate to GSD agents — uses actual `/gsd:discuss-phase`, `/gsd:plan-phase`, `/gsd:execute-phase`, `/gsd:verify-work` commands. Reads `.planning/ROADMAP.md` for phase dependencies, dispatches phases in dependency order with stuck detection. Requires `.planning/` directory (run `/gsd:new-project` first).
    - **research**: Create research subtopics as tasks
    - **evolve**: Do NOT decompose into tasks. Just initialize state files and start the loop. The strategist agent inside the loop generates milestones autonomously. Write an empty `tasks: []` to progress.json. Initialize `.autopilot/milestones.json` with empty milestones array.
+   - **build-saas**: Initialize state files, set mode to `build-saas` in mission.json. Do NOT decompose into tasks — the script runs phased: market research → scaffold → core features (GSD) → marketing → polish → transitions to evolve. Mission text becomes the product description.
+   - **marketing**: Initialize state files, set mode to `marketing` in mission.json. The script generates content iteratively (blog posts, social, pSEO pages) until hours/max-iterations reached.
 4. Write the task list to `.autopilot/progress.json`
 5. Write initial handoff notes to `.autopilot/handoff.md`
 
@@ -104,6 +110,28 @@ nohup bash "${CLAUDE_PLUGIN_ROOT}/scripts/autopilot.sh" \
   --hours <N> \
   --milestones <N_or_omit> \
   --focus "<focus_or_omit>" \
+  --budget "<budget_or_omit>" \
+  --phase-timeout <timeout_or_1800> \
+  > .autopilot/loop.log 2>&1 &
+```
+
+For `build-saas` mode:
+```bash
+nohup bash "${CLAUDE_PLUGIN_ROOT}/scripts/autopilot.sh" \
+  --project-dir "$(pwd)" \
+  --hours <N> \
+  --budget "<budget_or_omit>" \
+  --phase-timeout <timeout_or_1800> \
+  > .autopilot/loop.log 2>&1 &
+```
+
+For `marketing` mode:
+```bash
+nohup bash "${CLAUDE_PLUGIN_ROOT}/scripts/autopilot.sh" \
+  --project-dir "$(pwd)" \
+  --max-iterations <N> \
+  --hours <N> \
+  --budget "<budget_or_omit>" \
   > .autopilot/loop.log 2>&1 &
 ```
 
@@ -117,5 +145,17 @@ Output:
 - How to check status: `/autopilot-status`
 - How to stop: `/autopilot-stop`
 - Log location: `.autopilot/loop.log`
+- Budget limit (if `--budget` was set) and phase timeout
+- Cost tracking: `.autopilot/costs.json` (updated after each iteration)
 
 Add `.autopilot/` to `.gitignore` if not already there.
+
+## Examples
+
+```
+/autopilot "Add dark mode support" --mode mission --hours 4
+/autopilot --mode improve --hours 6 --focus "testing,security"
+/autopilot --mode build-saas "AI-powered recipe generator for meal prep" --budget 50 --hours 12
+/autopilot --mode marketing --hours 4 --budget 20
+/autopilot --mode evolve --hours 24 --budget 100 --phase-timeout 2400
+```
