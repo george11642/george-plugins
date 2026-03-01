@@ -38,11 +38,6 @@ LOG_FILE=""
 MAX_MILESTONES=0       # 0 = unlimited
 EVOLVE_FOCUS=""        # comma-separated focus areas
 
-# GSD execute mode state
-declare -A GSD_PHASE_DEPS
-declare -A GSD_PHASE_STUCK_COUNT
-declare -A GSD_PHASE_LAST_ACTION
-declare -A GSD_PHASE_SKIPPED
 
 #=============================================================================
 # Colors
@@ -123,6 +118,243 @@ EOF
 }
 
 #=============================================================================
+# Learning — Structured Cross-Iteration Knowledge
+#=============================================================================
+
+LEARNING_FILE=""
+
+learning_init() {
+    LEARNING_FILE="$AUTOPILOT_DIR/learning.json"
+    if [[ ! -f "$LEARNING_FILE" ]]; then
+        cat > "$LEARNING_FILE" << 'EOF'
+{
+  "iterations": [],
+  "patterns": {
+    "recurring_errors": [],
+    "successful_approaches": [],
+    "failed_approaches": []
+  }
+}
+EOF
+        log_info "Initialized learning.json"
+    fi
+}
+
+# Returns a compact summary of recent learning to inject into iteration prompts
+learning_read_context() {
+    [[ -z "$LEARNING_FILE" ]] && LEARNING_FILE="$AUTOPILOT_DIR/learning.json"
+    [[ ! -f "$LEARNING_FILE" ]] && return 0
+
+    python3 - "$LEARNING_FILE" << 'PYEOF' 2>/dev/null || true
+import json, sys
+
+data = json.load(open(sys.argv[1]))
+iterations = data.get("iterations", [])
+patterns = data.get("patterns", {})
+
+if not iterations and not patterns.get("recurring_errors"):
+    print("No prior iterations recorded.")
+    sys.exit(0)
+
+# Last 3 iterations summary
+recent = iterations[-3:]
+if recent:
+    print("### Recent Iterations (last {}):".format(len(recent)))
+    for it in recent:
+        outcome = it.get("outcome", "unknown")
+        task = it.get("task", "?")[:80]
+        dur = it.get("duration_seconds", 0)
+        print(f"- Iter {it.get('iteration','?')}: [{outcome}] {task} ({dur}s)")
+        for w in it.get("what_worked", [])[:2]:
+            print(f"  + worked: {w}")
+        for f in it.get("what_failed", [])[:2]:
+            print(f"  - failed: {f}")
+
+# Recurring errors with resolutions
+rec_errors = patterns.get("recurring_errors", [])
+if rec_errors:
+    print("\n### Recurring Errors (know these):")
+    for e in rec_errors[:5]:
+        print(f"- [{e.get('count',0)}x] {e.get('error','?')}")
+        if e.get("last_resolution"):
+            print(f"  Resolution: {e['last_resolution']}")
+
+# Successful approaches
+success = patterns.get("successful_approaches", [])
+if success:
+    print("\n### Proven Approaches (reuse these):")
+    for s in success[:5]:
+        print(f"- {s}")
+
+# Failed approaches
+failed = patterns.get("failed_approaches", [])
+if failed:
+    print("\n### Known Dead Ends (avoid these):")
+    for f in failed[:5]:
+        print(f"- {f}")
+PYEOF
+}
+
+# Aggregate patterns from iterations array — promotes recurring items to patterns
+aggregate_patterns() {
+    [[ -z "$LEARNING_FILE" ]] && LEARNING_FILE="$AUTOPILOT_DIR/learning.json"
+    [[ ! -f "$LEARNING_FILE" ]] && return 0
+
+    python3 - "$LEARNING_FILE" << 'PYEOF' 2>/dev/null || true
+import json, sys
+from collections import Counter
+
+path = sys.argv[1]
+data = json.load(open(path))
+iterations = data.get("iterations", [])
+patterns = data.get("patterns", {"recurring_errors": [], "successful_approaches": [], "failed_approaches": []})
+
+# Count errors across all iterations
+error_counts = Counter()
+error_resolutions = {}
+for it in iterations:
+    for e in it.get("errors_encountered", []):
+        msg = e.get("error", "")
+        if msg:
+            error_counts[msg] += 1
+            if e.get("resolution"):
+                error_resolutions[msg] = e["resolution"]
+
+# Promote errors seen 2+ times
+existing_errors = {e["error"] for e in patterns["recurring_errors"]}
+for msg, count in error_counts.items():
+    if count >= 2 and msg not in existing_errors:
+        patterns["recurring_errors"].append({
+            "error": msg,
+            "count": count,
+            "last_resolution": error_resolutions.get(msg, "")
+        })
+    elif count >= 2:
+        # Update count on existing
+        for e in patterns["recurring_errors"]:
+            if e["error"] == msg:
+                e["count"] = count
+                if error_resolutions.get(msg):
+                    e["last_resolution"] = error_resolutions[msg]
+                break
+
+# Count successful approaches
+approach_success = Counter()
+for it in iterations:
+    if it.get("outcome") in ("success", "partial"):
+        for a in it.get("what_worked", []):
+            if a:
+                approach_success[a] += 1
+
+existing_success = set(patterns["successful_approaches"])
+for approach, count in approach_success.items():
+    if count >= 2 and approach not in existing_success:
+        patterns["successful_approaches"].append(approach)
+
+# Count failed approaches
+approach_failed = Counter()
+for it in iterations:
+    if it.get("outcome") in ("failure", "partial"):
+        for a in it.get("what_failed", []):
+            if a:
+                approach_failed[a] += 1
+
+existing_failed = set(patterns["failed_approaches"])
+for approach, count in approach_failed.items():
+    if count >= 2 and approach not in existing_failed:
+        patterns["failed_approaches"].append(approach)
+
+data["patterns"] = patterns
+json.dump(data, open(path, "w"), indent=2)
+print("Patterns aggregated.")
+PYEOF
+    log_info "Learning patterns aggregated"
+}
+
+# Generate handoff.md from learning.json (falls back to existing handoff.md if no learning data)
+generate_handoff_from_learning() {
+    [[ -z "$LEARNING_FILE" ]] && LEARNING_FILE="$AUTOPILOT_DIR/learning.json"
+
+    if [[ ! -f "$LEARNING_FILE" ]]; then
+        # No learning.json — leave handoff.md as-is (backward compat)
+        return 0
+    fi
+
+    python3 - "$LEARNING_FILE" "$AUTOPILOT_DIR/handoff.md" << 'PYEOF' 2>/dev/null || true
+import json, sys, os
+
+learning_path = sys.argv[1]
+handoff_path = sys.argv[2]
+
+data = json.load(open(learning_path))
+iterations = data.get("iterations", [])
+patterns = data.get("patterns", {})
+
+if not iterations:
+    # No structured data yet — don't overwrite existing handoff.md
+    sys.exit(0)
+
+last = iterations[-1]
+lines = []
+lines.append("# Handoff Notes")
+lines.append("")
+lines.append("## Current Task")
+lines.append(last.get("task", "[unknown task]"))
+lines.append("")
+lines.append("## What's Done")
+for w in last.get("what_worked", []):
+    lines.append(f"- {w}")
+if not last.get("what_worked"):
+    lines.append("- (no items recorded)")
+lines.append("")
+lines.append("## What's Left")
+lines.append("- (see progress.json for next pending task)")
+lines.append("")
+lines.append("## Key Context")
+decisions = last.get("decisions_made", [])
+for d in decisions:
+    lines.append(f"- AUTO-DECIDED: {d.get('decision','?')} — because {d.get('reason','?')}")
+if not decisions:
+    lines.append("- (no decisions recorded this iteration)")
+lines.append("")
+lines.append("## Failed Approaches")
+for f in last.get("what_failed", []):
+    lines.append(f"- {f} — DO NOT retry")
+if not last.get("what_failed"):
+    lines.append("- (none this iteration)")
+lines.append("")
+lines.append("## Files Modified")
+for f in last.get("files_modified", []):
+    lines.append(f"- `{f}`")
+if not last.get("files_modified"):
+    lines.append("- (none recorded)")
+lines.append("")
+lines.append("## State")
+lines.append(f"- Iteration: {last.get('iteration','?')}")
+lines.append(f"- Outcome: {last.get('outcome','unknown')}")
+lines.append(f"- Duration: {last.get('duration_seconds', 0)}s")
+commits = last.get("commits", [])
+lines.append(f"- Commits: {', '.join(commits) if commits else 'none'}")
+lines.append("")
+
+# Recurring error patterns
+rec_errors = patterns.get("recurring_errors", [])
+if rec_errors:
+    lines.append("## Recurring Errors (from learning.json)")
+    for e in rec_errors[:5]:
+        lines.append(f"- [{e.get('count',0)}x] {e.get('error','?')}")
+        if e.get("last_resolution"):
+            lines.append(f"  Resolution: {e['last_resolution']}")
+    lines.append("")
+
+with open(handoff_path, "w") as f:
+    f.write("\n".join(lines) + "\n")
+
+print("handoff.md generated from learning.json")
+PYEOF
+}
+
+#=============================================================================
 # State Management
 #=============================================================================
 
@@ -186,292 +418,6 @@ should_stop() {
     return 1
 }
 
-#=============================================================================
-# GSD Execute Mode — State Detection & Command Mapping
-#=============================================================================
-
-# Get list of phases from ROADMAP.md
-gsd_get_phases() {
-    local roadmap="$PROJECT_DIR/.planning/ROADMAP.md"
-    [[ ! -f "$roadmap" ]] && { log_error "ROADMAP.md not found"; return 1; }
-    grep -oE 'Phase [0-9]+' "$roadmap" | grep -oE '[0-9]+' | sort -u -n
-}
-
-# Get status of a GSD phase
-gsd_get_phase_status() {
-    local phase=$1
-    local state_file="$PROJECT_DIR/.planning/STATE.md"
-    local phase_dir="$PROJECT_DIR/.planning/phases"
-
-    # Check STATE.md for completion
-    if [[ -f "$state_file" ]]; then
-        if grep -E "^\|[[:space:]]*$phase\.[[:space:]].*\|[[:space:]]*Completed[[:space:]]*\|" "$state_file" >/dev/null 2>&1; then
-            echo "verified"; return
-        fi
-    fi
-
-    local phase_padded=$(printf "%02d" "$phase")
-    local phase_path=""
-
-    # Find phase directory (handles 06, 06-name, etc.)
-    if [[ -d "$phase_dir/$phase_padded" ]]; then
-        phase_path="$phase_dir/$phase_padded"
-    elif [[ -d "$phase_dir/$phase" ]]; then
-        phase_path="$phase_dir/$phase"
-    else
-        local found_dir
-        found_dir=$(find "$phase_dir" -maxdepth 1 -type d -name "${phase_padded}-*" 2>/dev/null | head -1)
-        if [[ -z "$found_dir" ]]; then
-            found_dir=$(find "$phase_dir" -maxdepth 1 -type d -name "${phase}-*" 2>/dev/null | head -1)
-        fi
-        if [[ -n "$found_dir" && -d "$found_dir" ]]; then
-            phase_path="$found_dir"
-        else
-            echo "not_started"; return
-        fi
-    fi
-
-    # Check VERIFICATION.md
-    local verification_file=""
-    if [[ -f "$phase_path/VERIFICATION.md" ]]; then
-        verification_file="$phase_path/VERIFICATION.md"
-    else
-        verification_file=$(find "$phase_path" -maxdepth 1 -name "*VERIFICATION.md" 2>/dev/null | head -1)
-    fi
-
-    if [[ -n "$verification_file" && -f "$verification_file" ]]; then
-        if grep -qi "VERIFIED\|PASSED\|SUCCESS\|ALL.*COMPLETE" "$verification_file" 2>/dev/null; then
-            echo "verified"; return
-        else
-            echo "gaps"; return
-        fi
-    fi
-
-    # Check PLAN and SUMMARY files
-    local plan_count summary_count
-    plan_count=$(find "$phase_path" -maxdepth 1 -name "*PLAN.md" 2>/dev/null | wc -l)
-    summary_count=$(find "$phase_path" -maxdepth 1 -name "*SUMMARY.md" 2>/dev/null | wc -l)
-
-    if [[ $plan_count -gt 0 && $summary_count -ge $plan_count ]]; then
-        echo "executed"; return
-    fi
-    if [[ $plan_count -gt 0 && $summary_count -gt 0 ]]; then
-        echo "partially_executed"; return
-    fi
-    if [[ $plan_count -gt 0 ]]; then
-        echo "planned"; return
-    fi
-
-    # Check for context/research files
-    if [[ -f "$phase_path/CONTEXT.md" ]] || [[ -f "$phase_path/DISCUSSION.md" ]]; then
-        echo "context_captured"; return
-    fi
-    if compgen -G "$phase_path/*RESEARCH.md" > /dev/null 2>&1; then
-        echo "context_captured"; return
-    fi
-
-    echo "not_started"
-}
-
-# Map phase status to GSD command
-gsd_determine_action() {
-    local phase=$1
-    local status
-    status=$(gsd_get_phase_status "$phase")
-
-    case $status in
-        not_started)
-            if [[ "$SKIP_DISCUSS" == true ]]; then
-                echo "plan-phase $phase"
-            else
-                echo "discuss-phase $phase"
-            fi ;;
-        context_captured)  echo "plan-phase $phase" ;;
-        planned)           echo "execute-phase $phase" ;;
-        partially_executed) echo "execute-phase $phase" ;;
-        executed)          echo "verify-work $phase" ;;
-        gaps)              echo "plan-phase $phase --gaps" ;;
-        verified)          echo "NEXT_PHASE" ;;
-        *)                 echo "ERROR" ;;
-    esac
-}
-
-# Parse phase dependencies from ROADMAP.md
-gsd_parse_dependencies() {
-    local roadmap="$PROJECT_DIR/.planning/ROADMAP.md"
-    [[ ! -f "$roadmap" ]] && return 1
-
-    local current_phase=""
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^##+[[:space:]]*Phase[[:space:]]+([0-9]+) ]]; then
-            current_phase="${BASH_REMATCH[1]}"
-            GSD_PHASE_DEPS["$current_phase"]=""
-        fi
-        if [[ -n "$current_phase" ]] && [[ "$line" =~ \*\*Depends[[:space:]]+on\*\*:[[:space:]]*(.*) ]]; then
-            local deps_line="${BASH_REMATCH[1]}"
-            local deps=""
-            while [[ "$deps_line" =~ Phase[[:space:]]+([0-9]+) ]]; do
-                deps="$deps ${BASH_REMATCH[1]}"
-                deps_line="${deps_line#*Phase ${BASH_REMATCH[1]}}"
-            done
-            GSD_PHASE_DEPS["$current_phase"]="${deps# }"
-        fi
-    done < "$roadmap"
-}
-
-# Check if phase dependencies are met
-gsd_deps_met() {
-    local phase=$1
-    local deps="${GSD_PHASE_DEPS[$phase]:-}"
-    [[ -z "$deps" ]] && return 0
-    for dep in $deps; do
-        [[ "$(gsd_get_phase_status "$dep")" != "verified" ]] && return 1
-    done
-    return 0
-}
-
-# Get ready phases (deps met, not verified, not stuck)
-gsd_get_ready_phases() {
-    local phases
-    phases=$(gsd_get_phases) || { echo "ERROR"; return; }
-
-    local ready="" all_verified=true
-
-    for phase in $phases; do
-        local status
-        status=$(gsd_get_phase_status "$phase")
-        [[ "$status" == "verified" ]] && continue
-        all_verified=false
-        [[ -n "${GSD_PHASE_SKIPPED[$phase]:-}" ]] && continue
-        gsd_deps_met "$phase" && ready="$ready $phase"
-    done
-
-    if [[ "$all_verified" == true ]]; then echo "COMPLETE"; return; fi
-    ready="${ready# }"
-    if [[ -z "$ready" ]]; then echo "DEADLOCK"; return; fi
-    echo "$ready"
-}
-
-# Per-phase stuck detection
-gsd_is_stuck() {
-    local phase=$1 action=$2
-    local last="${GSD_PHASE_LAST_ACTION[$phase]:-}"
-    local count="${GSD_PHASE_STUCK_COUNT[$phase]:-0}"
-
-    if [[ "$action" == "$last" ]]; then
-        count=$((count + 1))
-        GSD_PHASE_STUCK_COUNT["$phase"]=$count
-        [[ $count -ge 3 ]] && return 0
-    else
-        GSD_PHASE_STUCK_COUNT["$phase"]=1
-        GSD_PHASE_LAST_ACTION["$phase"]="$action"
-    fi
-    return 1
-}
-
-# Build GSD autonomous prompt
-build_gsd_prompt() {
-    local gsd_command=$1
-
-    cat << 'GSD_PREAMBLE'
-## AUTOPILOT — GSD Execute Mode
-
-You are running in autonomous mode inside the Autopilot loop, executing GSD phases.
-
-### Checkpoint Handling
-- **checkpoint:human-verify** → Log to .autopilot/handoff.md, CONTINUE. Assume correct.
-- **checkpoint:decision** → Choose the most sensible option. Log: "AUTO-DECIDED: [choice] because [reason]"
-- **checkpoint:human-action** → Log and SKIP. Continue with next task.
-
-### Completion Signal
-When the GSD command completes: AUTOPILOT_STATUS: ITERATION_COMPLETE
-On unrecoverable error: AUTOPILOT_STATUS: ERROR
-GSD_PREAMBLE
-
-    cat << EOF
-
----
-
-## Current Task
-
-Run the following GSD command:
-
-/gsd:$gsd_command
-
-Work autonomously. Do not ask for human input. Make sensible default choices.
-Log any skipped checkpoints to .autopilot/handoff.md.
-
-After the GSD command completes, also update .autopilot/handoff.md with:
-- What phase and step you just completed
-- What the next iteration should know
-- Any issues encountered
-
-When complete, output: AUTOPILOT_STATUS: ITERATION_COMPLETE
-EOF
-}
-
-# Check if GSD milestone is complete
-gsd_is_complete() {
-    local phases
-    phases=$(gsd_get_phases) || return 1
-    for phase in $phases; do
-        [[ "$(gsd_get_phase_status "$phase")" != "verified" ]] && return 1
-    done
-    return 0
-}
-
-# GSD should_stop (overrides default for execute mode)
-gsd_should_stop() {
-    [[ -f "$AUTOPILOT_DIR/STOP" ]] && { log_info "Stop signal detected"; return 0; }
-    local status; status=$(get_status)
-    [[ "$status" == "complete" || "$status" == "stopped" ]] && return 0
-    [[ $ITERATION -ge $MAX_ITERATIONS ]] && { log_warn "Max iterations ($MAX_ITERATIONS)"; return 0; }
-    local elapsed=$(( ($(date +%s) - START_TIME) / 3600 ))
-    [[ $elapsed -ge $MAX_HOURS ]] && { log_warn "Time limit (${MAX_HOURS}h)"; return 0; }
-    gsd_is_complete && { log_success "All GSD phases complete!"; return 0; }
-    return 1
-}
-
-# Run a single GSD iteration
-run_gsd_iteration() {
-    local gsd_command=$1
-    local phase=$2
-
-    local prompt
-    prompt=$(build_gsd_prompt "$gsd_command")
-
-    log_phase "GSD Iteration $ITERATION — /gsd:$gsd_command (Phase $phase)"
-
-    if [[ "$DRY_RUN" == true ]]; then
-        log_info "[DRY RUN] Would run: /gsd:$gsd_command"
-        return 0
-    fi
-
-    local iteration_log="$AUTOPILOT_DIR/iterations/iteration-${ITERATION}.log"
-    mkdir -p "$AUTOPILOT_DIR/iterations"
-
-    cd "$PROJECT_DIR"
-
-    local exit_code=0
-    claude -p "$prompt" \
-        --dangerously-skip-permissions \
-        --verbose \
-        --allowedTools '*' \
-        2>&1 | tee "$iteration_log" || exit_code=$?
-
-    # Check for status signals
-    if grep -q "AUTOPILOT_STATUS: BLOCKED" "$iteration_log" 2>/dev/null; then
-        log_warn "Agent blocked — check .autopilot/handoff.md"
-        sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "blocked"/' "$AUTOPILOT_DIR/mission.json"
-        return 1
-    fi
-
-    if grep -q "AUTOPILOT_STATUS: ERROR" "$iteration_log" 2>/dev/null; then
-        log_error "Error in GSD iteration $ITERATION"
-    fi
-
-    return 0
-}
 
 #=============================================================================
 # Evolve Mode — Milestone State Management
@@ -718,11 +664,46 @@ run_new_milestone() {
 }
 
 #=============================================================================
-# GSD Execute Mode Main Loop
+# GSD Execute Mode — Delegation to ralph-gsd.sh
 #=============================================================================
 
+# Locate ralph-gsd.sh dynamically across common plugin install locations
+find_ralph_gsd_script() {
+    local paths=(
+        "$HOME/.claude/plugins/marketplaces/george-plugins/plugins/ralph-gsd/scripts/ralph-gsd.sh"
+        "$HOME/.claude/plugins/ralph-gsd/scripts/ralph-gsd.sh"
+    )
+    for p in "${paths[@]}"; do
+        if [[ -f "$p" ]]; then echo "$p"; return 0; fi
+    done
+    log_error "ralph-gsd.sh not found in any known plugin location"
+    return 1
+}
+
+# Parse phases_complete and phases_total from a RALPH_EXIT line in a log file
+parse_ralph_exit() {
+    local log_file="$1"
+    local field="$2"  # "phases_complete" or "phases_total"
+    grep "^RALPH_EXIT:" "$log_file" 2>/dev/null | tail -1 | grep -oE "${field}=[0-9]+" | cut -d= -f2 || echo "0"
+}
+
+# GSD Execute Mode Main Loop
+#
+# Architecture: This function is a thin wrapper around ralph-gsd.sh.
+# Rather than reimplementing GSD phase detection + action mapping (which
+# ralph-gsd.sh already does), we delegate the entire state machine to it
+# and handle only the exit codes here.
+#
+# Exit code contract (from ralph-gsd.sh):
+#   0 = complete — all phases verified
+#   1 = error    — unrecoverable failure
+#   2 = stopped  — STOP file detected, graceful shutdown
+#   3 = deadlock — no phases can make progress
+#
+# In evolve mode, gsd_main_loop() is called between Strategist runs;
+# return status propagates to evolve_main_loop() for milestone bookkeeping.
 gsd_main_loop() {
-    log_info "GSD Execute Mode — parsing .planning/ state"
+    log_info "GSD Execute Mode — delegating to ralph-gsd.sh"
 
     # Verify .planning/ exists
     if [[ ! -d "$PROJECT_DIR/.planning" ]]; then
@@ -730,57 +711,77 @@ gsd_main_loop() {
         return 1
     fi
 
-    # Parse dependencies
-    gsd_parse_dependencies || { log_error "Failed to parse dependencies"; return 1; }
+    local ralph_gsd_path
+    ralph_gsd_path=$(find_ralph_gsd_script) || return 1
 
-    while ! gsd_should_stop; do
-        ITERATION=$((ITERATION + 1))
-        local iter_start=$(date +%s)
+    local ralph_log="$AUTOPILOT_DIR/ralph-gsd.log"
+    local stop_file="$AUTOPILOT_DIR/STOP"
 
-        # Get ready phases
-        local ready
-        ready=$(gsd_get_ready_phases)
+    # Build flags
+    local ralph_flags=(
+        --project-dir "$PROJECT_DIR"
+        --stop-file   "$stop_file"
+        --log-file    "$ralph_log"
+        --resume
+    )
 
-        case "$ready" in
-            COMPLETE)
-                log_success "All GSD phases complete!"
-                sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "complete"/' "$AUTOPILOT_DIR/mission.json"
-                break ;;
-            DEADLOCK)
-                log_error "Deadlock: phases remain but none have deps met"
-                break ;;
-            ERROR)
-                log_error "No phases found in ROADMAP.md"
-                break ;;
-        esac
+    [[ "$SKIP_DISCUSS" == true ]] && ralph_flags+=(--skip-discuss)
+    [[ "$DRY_RUN"      == true ]] && ralph_flags+=(--dry-run)
 
-        # Pick first ready phase and determine action
-        local -a ready_array=($ready)
-        local phase="${ready_array[0]}"
-        local action
-        action=$(gsd_determine_action "$phase")
+    if [[ "$DRY_RUN" == true ]]; then
+        log_info "[DRY RUN] Would run: ralph-gsd.sh ${ralph_flags[*]}"
+        return 0
+    fi
 
-        if [[ "$action" == "NEXT_PHASE" || "$action" == "ERROR" ]]; then
-            continue
-        fi
+    log_info "Launching ralph-gsd.sh..."
+    local exit_code=0
+    bash "$ralph_gsd_path" "${ralph_flags[@]}" 2>&1 | tee -a "$AUTOPILOT_DIR/loop.log" || exit_code=$?
 
-        # Stuck detection
-        if gsd_is_stuck "$phase" "$action"; then
-            log_warn "Phase $phase stuck on '$action' (3x) — skipping"
-            GSD_PHASE_SKIPPED["$phase"]=1
-            continue
-        fi
+    # Parse machine-readable summary from ralph-gsd log
+    local phases_complete phases_total
+    phases_complete=$(parse_ralph_exit "$ralph_log" "phases_complete")
+    phases_total=$(parse_ralph_exit    "$ralph_log" "phases_total")
+    log_info "ralph-gsd finished: phases $phases_complete/$phases_total"
 
-        # Run the GSD command
-        if ! run_gsd_iteration "$action" "$phase"; then
-            break
-        fi
-
-        local duration=$(( $(date +%s) - iter_start ))
-        log_info "Iteration $ITERATION took ${duration}s"
-
-        sleep 3
-    done
+    case $exit_code in
+        0)
+            # Complete — all phases verified
+            log_success "GSD milestone complete (all $phases_total phases verified)"
+            sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "complete"/' "$AUTOPILOT_DIR/mission.json"
+            return 0
+            ;;
+        1)
+            # Error — retry once with --resume, then give up
+            log_error "ralph-gsd reported an error — retrying once with --resume"
+            local retry_code=0
+            bash "$ralph_gsd_path" "${ralph_flags[@]}" 2>&1 | tee -a "$AUTOPILOT_DIR/loop.log" || retry_code=$?
+            if [[ $retry_code -ne 0 ]]; then
+                log_error "ralph-gsd failed after retry (exit $retry_code) — marking milestone failed"
+                sed -i 's/"status"[[:space:]]*:[[:space:]]*"active"/"status": "error"/' "$AUTOPILOT_DIR/mission.json"
+                return 1
+            fi
+            log_success "GSD retry succeeded"
+            return 0
+            ;;
+        2)
+            # Stopped — propagate stop signal to autopilot outer loop
+            log_info "ralph-gsd stopped (STOP file) — propagating to autopilot"
+            # Ensure STOP file exists so autopilot's outer should_stop() fires
+            touch "$AUTOPILOT_DIR/STOP"
+            return 2
+            ;;
+        3)
+            # Deadlock — behavior differs by calling context:
+            #   evolve mode: log warning, return non-zero so milestone is skipped
+            #   execute mode: log error and return
+            log_warn "ralph-gsd deadlock: no phases can make progress (phases $phases_complete/$phases_total complete)"
+            return 3
+            ;;
+        *)
+            log_error "ralph-gsd exited with unexpected code $exit_code"
+            return 1
+            ;;
+    esac
 }
 
 #=============================================================================
@@ -841,15 +842,33 @@ evolve_main_loop() {
         if evolve_should_stop; then break; fi
 
         # ── Phase D: Execute all GSD phases for this milestone ──────────────
-        # Reset per-phase tracking for this milestone
-        unset GSD_PHASE_DEPS GSD_PHASE_STUCK_COUNT GSD_PHASE_LAST_ACTION GSD_PHASE_SKIPPED
-        declare -A GSD_PHASE_DEPS
-        declare -A GSD_PHASE_STUCK_COUNT
-        declare -A GSD_PHASE_LAST_ACTION
-        declare -A GSD_PHASE_SKIPPED
-
         log_info "Starting GSD phase execution for milestone: $ms_title"
-        gsd_main_loop
+        local gsd_rc=0
+        gsd_main_loop || gsd_rc=$?
+
+        # Handle ralph-gsd exit codes from gsd_main_loop
+        case $gsd_rc in
+            0)
+                # Success — fall through to Phase E
+                ;;
+            2)
+                # Stopped — propagate and exit evolve loop immediately
+                log_info "Milestone halted by STOP signal — exiting evolve loop"
+                break
+                ;;
+            3)
+                # Deadlock — skip this milestone, continue evolve loop
+                log_warn "Milestone '$ms_title' deadlocked — skipping, continuing to next"
+                evolve_update_milestone_status "$ms_id" "completed" "skippedReason" "deadlock"
+                continue
+                ;;
+            *)
+                # Error — log but still continue to next milestone
+                log_error "GSD execution failed (rc=$gsd_rc) for milestone '$ms_title' — continuing to next"
+                evolve_update_milestone_status "$ms_id" "completed" "skippedReason" "error"
+                continue
+                ;;
+        esac
 
         # ── Phase E: Mark milestone complete, re-evaluate ───────────────────
         evolve_update_milestone_status "$ms_id" "completed"
@@ -895,6 +914,14 @@ build_iteration_prompt() {
     local progress_content
     progress_content=$(cat "$AUTOPILOT_DIR/progress.json")
 
+    # Read cross-iteration learning context (compact summary)
+    local learning_context
+    learning_context=$(learning_read_context 2>/dev/null || echo "No prior learning data.")
+
+    # Build iteration start timestamp for learning record
+    local iter_start_ts
+    iter_start_ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
     cat << PROMPT
 ## AUTOPILOT — Autonomous Coding Agent (Iteration $iteration)
 
@@ -913,6 +940,12 @@ $recent_commits
 
 ### HANDOFF FROM PREVIOUS ITERATION
 $handoff_content
+
+### CROSS-ITERATION LEARNING
+The following is structured knowledge accumulated from previous iterations.
+Use it to avoid repeated mistakes and reuse successful approaches.
+
+$learning_context
 
 ### TASK LIST (from .autopilot/progress.json)
 $progress_content
@@ -953,11 +986,38 @@ $progress_content
   - Increment the "iteration" counter
   - Add commit hash to "commits" array
   - Add any learnings to "learnings" array
-- Update .autopilot/handoff.md with:
-  - What you just did
-  - What the next task should know
-  - Any issues or blockers discovered
-  - Key files you touched
+- Update .autopilot/learning.json (REQUIRED — append your iteration record):
+  Use python3 to append a new entry to the "iterations" array. Template:
+  \`\`\`python
+  import json, subprocess
+  from datetime import datetime, timezone
+
+  path = ".autopilot/learning.json"
+  data = json.load(open(path))
+  iter_start = "$iter_start_ts"  # set above by autopilot.sh
+
+  # Get commit SHAs you made this iteration
+  commits_raw = subprocess.run(["git", "log", "--oneline", "-5"], capture_output=True, text=True).stdout
+  # Parse only the hashes you actually created (compare against what was in progress.json before)
+
+  record = {
+      "iteration": $iteration,
+      "timestamp": iter_start,
+      "task": "<task title you worked on>",
+      "outcome": "success",  # or "failure" or "partial"
+      "duration_seconds": int((datetime.now(timezone.utc) - datetime.fromisoformat(iter_start.replace('Z','+00:00'))).total_seconds()),
+      "what_worked": ["<describe what approach succeeded>"],
+      "what_failed": ["<describe any approach that didn't work>"],
+      "errors_encountered": [{"error": "<error message>", "resolution": "<how you fixed it>"}],
+      "decisions_made": [{"decision": "<chose X over Y>", "reason": "<why>"}],
+      "files_modified": ["<list of files you touched>"],
+      "commits": ["<sha>"]
+  }
+  data["iterations"].append(record)
+  json.dump(data, open(path, "w"), indent=2)
+  \`\`\`
+  Fill in all fields accurately. If nothing failed, use empty lists — do NOT make up entries.
+  If .autopilot/learning.json does not exist, create it with schema: {"iterations": [], "patterns": {"recurring_errors": [], "successful_approaches": [], "failed_approaches": []}}
 
 ### Step 7: Signal Completion
 Output exactly: AUTOPILOT_STATUS: ITERATION_COMPLETE
@@ -968,8 +1028,8 @@ Output exactly: AUTOPILOT_STATUS: ITERATION_COMPLETE
 
 1. ONE TASK PER ITERATION. Do not try to do multiple tasks. Quality > quantity.
 2. ALWAYS commit your work before finishing. Uncommitted work is lost work.
-3. ALWAYS update progress.json and handoff.md. The next iteration depends on it.
-4. If a task is unclear, make your best judgment and document the decision.
+3. ALWAYS update progress.json AND learning.json. The next iteration depends on both.
+4. If a task is unclear, make your best judgment and document the decision in learning.json.
 5. If a task fails after 2 retries, mark it as "error" with notes and move on.
 6. NEVER modify .autopilot/mission.json — that's the user's intent.
 7. NEVER delete files without strong justification. Prefer editing.
@@ -1033,6 +1093,10 @@ run_iteration() {
         # Don't stop — let the next iteration try the next task
     fi
 
+    # Post-iteration learning: aggregate patterns and regenerate handoff.md
+    aggregate_patterns
+    generate_handoff_from_learning
+
     return 0
 }
 
@@ -1059,6 +1123,9 @@ main() {
     log_info "Max iterations: $MAX_ITERATIONS"
     log_info "Time limit: ${MAX_HOURS}h"
     log_info "Project: $PROJECT_DIR"
+
+    # Initialize learning system (no-op if already exists)
+    learning_init
 
     # Resume from previous state
     if [[ "$RESUME" == true ]]; then

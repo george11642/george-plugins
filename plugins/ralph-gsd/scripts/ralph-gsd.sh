@@ -14,7 +14,16 @@
 #   --skip-discuss        Auto-skip discuss phase with defaults
 #   --max-parallel N      Max concurrent Claude sessions (default: 4)
 #   --dry-run             Show what would happen without executing
+#   --stop-file PATH      External STOP file to check each iteration
+#   --resume              Skip phases already verified in STATE.md
+#   --log-file PATH       Redirect log output to this path
 #   --help                Show this help message
+#
+# Exit Codes:
+#   0 = complete (all phases verified)
+#   1 = error (unrecoverable failure)
+#   2 = stopped (STOP file detected, graceful shutdown)
+#   3 = deadlock (no phases can make progress)
 #
 # Author: George (via Claude)
 # License: MIT
@@ -33,7 +42,19 @@ PROJECT_DIR=""
 MAX_ITERATIONS=$DEFAULT_MAX_ITERATIONS
 SKIP_DISCUSS=false
 DRY_RUN=false
+RESUME=false
+STOP_FILE_EXTERNAL=""
 ITERATION=0
+
+# Exit code constants
+EXIT_COMPLETE=0
+EXIT_ERROR=1
+EXIT_STOPPED=2
+EXIT_DEADLOCK=3
+
+# Tracks how we exited for the machine-readable summary
+RALPH_EXIT_CODE=$EXIT_COMPLETE
+RALPH_CURRENT_PHASE="none"
 
 # Parallel execution globals
 declare -A PHASE_DEPS          # phase → space-separated dependency phase numbers
@@ -80,6 +101,49 @@ log_phase() {
 }
 
 #=============================================================================
+# Stop File and Exit Handling
+#=============================================================================
+
+# Check if a STOP file exists (internal or external)
+# Returns 0 (true) if stop is requested, 1 (false) otherwise
+is_stop_requested() {
+    local internal_stop="$PROJECT_DIR/.planning/RALPH_STOP"
+
+    if [[ -f "$internal_stop" ]]; then
+        log_warn "Internal STOP file detected: $internal_stop"
+        return 0
+    fi
+
+    if [[ -n "$STOP_FILE_EXTERNAL" ]] && [[ -f "$STOP_FILE_EXTERNAL" ]]; then
+        log_warn "External STOP file detected: $STOP_FILE_EXTERNAL"
+        return 0
+    fi
+
+    return 1
+}
+
+# Remove stop files after graceful shutdown
+cleanup_stop_files() {
+    local internal_stop="$PROJECT_DIR/.planning/RALPH_STOP"
+    [[ -f "$internal_stop" ]] && rm -f "$internal_stop" && log_info "Removed internal STOP file"
+    if [[ -n "$STOP_FILE_EXTERNAL" ]] && [[ -f "$STOP_FILE_EXTERNAL" ]]; then
+        rm -f "$STOP_FILE_EXTERNAL"
+        log_info "Removed external STOP file: $STOP_FILE_EXTERNAL"
+    fi
+}
+
+# Print machine-readable exit summary and exit with the given code
+ralph_exit() {
+    local code=$1
+    local phases_complete=${2:-0}
+    local phases_total=${3:-0}
+    local current_phase=${4:-"none"}
+
+    echo "RALPH_EXIT: code=$code phases_complete=$phases_complete phases_total=$phases_total current_phase=$current_phase"
+    exit "$code"
+}
+
+#=============================================================================
 # Help and Version
 #=============================================================================
 
@@ -98,8 +162,31 @@ OPTIONS:
     --skip-discuss        Auto-skip discuss phase using sensible defaults
     --max-parallel N      Maximum concurrent Claude sessions (default: 4)
     --dry-run             Show planned actions without executing
+    --stop-file PATH      External STOP file to check each iteration (in addition
+                          to the internal .planning/RALPH_STOP file). Either file
+                          triggers graceful shutdown with exit code 2.
+    --resume              Skip phases that are already verified. Useful for
+                          restarting after a stop without re-running completed work.
+    --log-file PATH       Redirect log output to this path instead of the default
+                          .planning/ralph-gsd.log
     --help                Show this help message
     --version             Show version information
+
+EXIT CODES:
+    0   Complete — all phases verified successfully
+    1   Error — unrecoverable failure
+    2   Stopped — STOP file detected, graceful shutdown after current phase
+    3   Deadlock — phases remain but none have dependencies met
+
+MACHINE-READABLE OUTPUT:
+    On exit, ralph-gsd prints a summary line to stdout:
+        RALPH_EXIT: code=N phases_complete=X phases_total=Y current_phase=Z
+
+STOP FILE:
+    Create .planning/RALPH_STOP (or the path given via --stop-file) to request a
+    graceful stop. Ralph finishes the current in-progress phase, then exits with
+    code 2. The STOP file is removed automatically on graceful shutdown so that a
+    subsequent --resume run can proceed cleanly.
 
 DESCRIPTION:
     Ralph-GSD orchestrates the GSD workflow autonomously. After creating a
@@ -129,9 +216,10 @@ WORKFLOW:
     4. Review deferred: cat .planning/DEFERRED.md
 
 FILES:
-    .planning/STATE.md      Current milestone state
-    .planning/ROADMAP.md    Phase definitions
-    .planning/DEFERRED.md   Skipped checkpoints for review
+    .planning/STATE.md       Current milestone state
+    .planning/ROADMAP.md     Phase definitions
+    .planning/DEFERRED.md    Skipped checkpoints for review
+    .planning/RALPH_STOP     Create this file to request graceful shutdown
 
 EXAMPLES:
     # Execute milestone with default settings
@@ -145,6 +233,12 @@ EXAMPLES:
 
     # Run with 8 parallel sessions
     ralph-gsd.sh --project-dir . --max-parallel 8
+
+    # Resume after a previous stop (skip already-verified phases)
+    ralph-gsd.sh --project-dir . --resume
+
+    # Integrate with an autopilot controller that manages the STOP file
+    ralph-gsd.sh --project-dir . --stop-file .autopilot/STOP --log-file .autopilot/ralph.log
 
 EOF
 }
@@ -179,6 +273,18 @@ parse_args() {
             --dry-run)
                 DRY_RUN=true
                 shift
+                ;;
+            --stop-file)
+                STOP_FILE_EXTERNAL="$2"
+                shift 2
+                ;;
+            --resume)
+                RESUME=true
+                shift
+                ;;
+            --log-file)
+                LOG_FILE="$2"
+                shift 2
                 ;;
             --help)
                 show_help
@@ -216,8 +322,10 @@ parse_args() {
         exit 1
     fi
 
-    # Set up log file
-    LOG_FILE="$PROJECT_DIR/.planning/ralph-gsd.log"
+    # Set up log file (only if not provided via --log-file)
+    if [[ -z "$LOG_FILE" ]]; then
+        LOG_FILE="$PROJECT_DIR/.planning/ralph-gsd.log"
+    fi
 }
 
 #=============================================================================
@@ -225,6 +333,7 @@ parse_args() {
 #=============================================================================
 
 # Get list of phases from ROADMAP.md
+# Only returns phases that are NOT already marked complete with [x] checkboxes
 get_phases() {
     local roadmap="$PROJECT_DIR/.planning/ROADMAP.md"
 
@@ -233,9 +342,21 @@ get_phases() {
         return 1
     fi
 
-    # Extract phase numbers from ROADMAP.md
-    # Looking for patterns like "## Phase 01:" or "### Phase 1:"
-    grep -oE 'Phase [0-9]+' "$roadmap" | grep -oE '[0-9]+' | sort -u -n
+    # Extract completed phase numbers: lines like "- [x] Phase N:" or "- [x] Phase N "
+    local completed_phases
+    completed_phases=$(grep -oE '^\- \[x\] Phase [0-9]+' "$roadmap" | grep -oE '[0-9]+' | sort -u -n)
+
+    # Extract ALL phase numbers from section headers (## Phase N or ### Phase N)
+    # These are the authoritative phase definitions (not the checkbox summary list)
+    local all_phases
+    all_phases=$(grep -oE '^#{2,}[[:space:]]*Phase[[:space:]]+[0-9]+' "$roadmap" | grep -oE '[0-9]+' | sort -u -n)
+
+    # Return only phases not in the completed set
+    for phase in $all_phases; do
+        if ! echo "$completed_phases" | grep -qx "$phase"; then
+            echo "$phase"
+        fi
+    done
 }
 
 # Get status of a specific phase
@@ -559,12 +680,36 @@ parse_all_dependencies() {
         # Look for dependency lines: **Depends on**: Phase 18 (v2.0 complete)
         if [[ -n "$current_phase" ]] && [[ "$line" =~ \*\*Depends[[:space:]]+on\*\*:[[:space:]]*(.*) ]]; then
             local deps_line="${BASH_REMATCH[1]}"
-            # Extract all "Phase N" references
+            # Extract all "Phase N" references (individual)
             local deps=""
             while [[ "$deps_line" =~ Phase[[:space:]]+([0-9]+) ]]; do
                 deps="$deps ${BASH_REMATCH[1]}"
                 deps_line="${deps_line#*Phase ${BASH_REMATCH[1]}}"
             done
+
+            # Extract range syntax: "Phases X-Y" or "phases X-Y" or "Phase X-Y"
+            # e.g. "Phases 13-18" → 13 14 15 16 17 18
+            # Re-read from the original capture since deps_line was consumed above
+            # Extract range syntax: "Phases X-Y" → expand to all integers X..Y
+            local orig_deps_line=""
+            if [[ "${line}" =~ \*\*Depends[[:space:]]+on\*\*:[[:space:]]*(.*) ]]; then
+                orig_deps_line="${BASH_REMATCH[1]}"
+            fi
+            if [[ -n "$orig_deps_line" ]]; then
+                while [[ "$orig_deps_line" =~ [Pp]hases?[[:space:]]+([0-9]+)-([0-9]+) ]]; do
+                    local range_start="${BASH_REMATCH[1]}"
+                    local range_end="${BASH_REMATCH[2]}"
+                    local matched="${BASH_REMATCH[0]}"
+                    for ((n = range_start; n <= range_end; n++)); do
+                        if [[ ! " $deps " =~ " $n " ]]; then
+                            deps="$deps $n"
+                        fi
+                    done
+                    # Advance past this match to find additional ranges
+                    orig_deps_line="${orig_deps_line#*${matched}}"
+                done
+            fi
+
             # Trim leading space
             deps="${deps# }"
             PHASE_DEPS["$current_phase"]="$deps"
@@ -695,7 +840,7 @@ run_gsd_command_parallel() {
 
     cd "$PROJECT_DIR"
 
-    if claude -p "$prompt" \
+    if env -u CLAUDECODE claude -p "$prompt" \
         --dangerously-skip-permissions \
         --verbose \
         --output-format stream-json \
@@ -773,7 +918,7 @@ run_gsd_command() {
     # Using stream-json for real-time output parsing
     cd "$PROJECT_DIR"
 
-    if claude -p "$prompt" \
+    if env -u CLAUDECODE claude -p "$prompt" \
         --dangerously-skip-permissions \
         --verbose \
         --output-format stream-json \
@@ -866,6 +1011,8 @@ main_loop() {
     log_info "Max parallel: $MAX_PARALLEL"
     log_info "Skip discuss: $SKIP_DISCUSS"
     log_info "Dry run: $DRY_RUN"
+    log_info "Resume: $RESUME"
+    [[ -n "$STOP_FILE_EXTERNAL" ]] && log_info "External stop file: $STOP_FILE_EXTERNAL"
 
     init_deferred
 
@@ -880,11 +1027,21 @@ main_loop() {
     mkdir -p "$PARALLEL_LOG_DIR"
 
     ITERATION=0
+    local exit_reason="complete"
+    local stop_detected=false
 
     while [[ $ITERATION -lt $MAX_ITERATIONS ]]; do
         ITERATION=$((ITERATION + 1))
 
         log_info "=== Iteration $ITERATION of $MAX_ITERATIONS ==="
+
+        # Check for STOP file at the top of each iteration (before doing any work)
+        if is_stop_requested; then
+            log_warn "STOP requested — finishing current state and exiting gracefully"
+            stop_detected=true
+            exit_reason="stopped"
+            break
+        fi
 
         # Get all ready phases
         local ready_phases
@@ -892,17 +1049,20 @@ main_loop() {
 
         if [[ "$ready_phases" == "COMPLETE" ]]; then
             log_success "All phases complete!"
+            exit_reason="complete"
             break
         fi
 
         if [[ "$ready_phases" == "DEADLOCK" ]]; then
             log_error "Deadlock detected: phases remaining but none have dependencies met"
             log_error "Manual intervention required"
+            exit_reason="deadlock"
             break
         fi
 
         if [[ "$ready_phases" == "ERROR" ]]; then
             log_error "No phases found in ROADMAP.md"
+            exit_reason="error"
             break
         fi
 
@@ -918,7 +1078,14 @@ main_loop() {
             local status
             status=$(get_phase_status "$phase")
 
+            RALPH_CURRENT_PHASE="$phase"
             log_phase "Phase $phase - Status: $status"
+
+            # --resume: skip phases that are already verified
+            if [[ "$RESUME" == true ]] && [[ "$status" == "verified" ]]; then
+                log_info "Resume mode: phase $phase already verified, skipping"
+                continue
+            fi
 
             # Determine next action
             local action
@@ -931,6 +1098,7 @@ main_loop() {
 
             if [[ "$action" == "ERROR" ]]; then
                 log_error "Could not determine action for phase $phase"
+                exit_reason="error"
                 break
             fi
 
@@ -964,6 +1132,18 @@ main_loop() {
 
             # Dispatch parallel jobs
             for phase in "${phases_to_run[@]}"; do
+                RALPH_CURRENT_PHASE="$phase"
+
+                # --resume: skip phases that are already verified
+                if [[ "$RESUME" == true ]]; then
+                    local pstatus
+                    pstatus=$(get_phase_status "$phase")
+                    if [[ "$pstatus" == "verified" ]]; then
+                        log_info "Resume mode: phase $phase already verified, skipping"
+                        continue
+                    fi
+                fi
+
                 local action
                 action=$(determine_next_action "$phase")
 
@@ -1010,6 +1190,20 @@ main_loop() {
         sleep 1
     done
 
+    # Handle iteration limit exhaustion (not a stop file, just ran out)
+    if [[ $ITERATION -ge $MAX_ITERATIONS ]] && [[ "$exit_reason" == "complete" ]] && ! is_milestone_complete; then
+        exit_reason="error"
+    fi
+
+    # Count phases for machine-readable output
+    local all_phases phases_complete phases_total
+    all_phases=$(get_phases 2>/dev/null || true)
+    phases_total=$(echo "$all_phases" | wc -w | tr -d ' ')
+    phases_complete=0
+    for p in $all_phases; do
+        [[ "$(get_phase_status "$p")" == "verified" ]] && phases_complete=$((phases_complete + 1))
+    done
+
     # Final summary
     echo ""
     log_info "=== Ralph-GSD Summary ==="
@@ -1017,9 +1211,11 @@ main_loop() {
 
     if is_milestone_complete; then
         log_success "Milestone fully completed!"
+        exit_reason="complete"
     else
         local current_phase
         current_phase=$(get_current_phase)
+        RALPH_CURRENT_PHASE="${current_phase:-none}"
         if [[ "$current_phase" != "COMPLETE" ]] && [[ "$current_phase" != "ERROR" ]]; then
             local status
             status=$(get_phase_status "$current_phase")
@@ -1042,6 +1238,22 @@ main_loop() {
 
     # Clean up parallel log directory
     rm -rf "$PARALLEL_LOG_DIR"
+
+    # Determine final exit code
+    local final_code
+    case "$exit_reason" in
+        complete)  final_code=$EXIT_COMPLETE ;;
+        stopped)   final_code=$EXIT_STOPPED ;;
+        deadlock)  final_code=$EXIT_DEADLOCK ;;
+        *)         final_code=$EXIT_ERROR ;;
+    esac
+
+    # Remove STOP files on graceful stop so a --resume run can proceed
+    if [[ "$exit_reason" == "stopped" ]]; then
+        cleanup_stop_files
+    fi
+
+    ralph_exit "$final_code" "$phases_complete" "$phases_total" "${RALPH_CURRENT_PHASE:-none}"
 }
 
 #=============================================================================
