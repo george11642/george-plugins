@@ -6,6 +6,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/install.sh\" 2>/dev/null || true",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "node -e \"process.stdout.write(require('fs').readFileSync(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'skills','orchestration-engine','SKILL.md'),'utf8'))\"",
             "timeout": 5
           }
