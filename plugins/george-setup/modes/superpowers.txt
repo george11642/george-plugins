@@ -1,0 +1,12 @@
+SUPERPOWERS MODE - Guided Design-First Workflow
+
+Rules:
+- Full guided workflow: brainstorming -> design approval -> TDD -> execution -> verification.
+- Invoke brainstorming skill before ANY creative or feature work.
+- Design approval gate: present design to user before implementation. Do NOT proceed until user approves.
+- TDD: write tests first, then implement to make tests pass.
+- Verification: tests + screenshots + code review. All three required.
+- Use superpowers skills: writing-plans, executing-plans, verification-before-completion.
+- Ask clarifying questions when requirements are ambiguous.
+- Default agent model: sonnet for implementation, opus for design decisions.
+- Research gate: always run research agent first for feature work.

@@ -1,109 +1,87 @@
 #!/usr/bin/env bash
-# george-setup install script
-# Bootstraps Claude config on a new machine.
-# Run: bash ~/.claude/plugins/marketplaces/george-plugins/plugins/george-setup/scripts/install.sh
-
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
-CLAUDE_DIR="$HOME/.claude"
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
-echo "=== george-setup install ==="
+echo "=== George's Claude Code Setup Installer ==="
 echo "Plugin dir: $PLUGIN_DIR"
 echo "Claude dir: $CLAUDE_DIR"
 echo ""
 
-# 1. CLAUDE.md global instructions
-if [ ! -f "$CLAUDE_DIR/CLAUDE.md" ]; then
-  cp "$PLUGIN_DIR/templates/global-claude-md.md" "$CLAUDE_DIR/CLAUDE.md"
-  echo "OK Installed CLAUDE.md"
-else
-  echo "-- CLAUDE.md already exists, skipping (delete to reinstall)"
-fi
-
-# 2. Hooks
+# Create all necessary directories
 mkdir -p "$CLAUDE_DIR/hooks"
-for hook in memory-reminder.js statusline.js; do
-  src="$PLUGIN_DIR/hooks/$hook"
-  if [ -f "$src" ]; then
-    cp "$src" "$CLAUDE_DIR/hooks/$hook"
-    echo "OK Installed hook: $hook"
-  else
-    echo "!! Hook not found in repo: $hook"
-  fi
-done
+mkdir -p "$CLAUDE_DIR/modes"
+mkdir -p "$CLAUDE_DIR/skills"
 
-# Also install gsd-statusline.js as the expected name in settings.json
-if [ -f "$CLAUDE_DIR/hooks/statusline.js" ]; then
-  cp "$CLAUDE_DIR/hooks/statusline.js" "$CLAUDE_DIR/hooks/gsd-statusline.js"
-  echo "OK Copied statusline.js -> gsd-statusline.js"
-fi
-
-# 3. Memory files
-mkdir -p "$CLAUDE_DIR/memory"
-if [ ! -f "$CLAUDE_DIR/memory/orchestration.md" ]; then
-  if [ -f "$PLUGIN_DIR/templates/orchestration.md" ]; then
-    cp "$PLUGIN_DIR/templates/orchestration.md" "$CLAUDE_DIR/memory/orchestration.md"
-    echo "OK Installed memory/orchestration.md"
-  else
-    echo "!! orchestration.md template not found"
-  fi
+# 1. Install CLAUDE.md (only if not already present, to avoid overwriting customizations)
+if [ ! -f "$CLAUDE_DIR/CLAUDE.md" ]; then
+  echo "Installing CLAUDE.md..."
+  cp "$PLUGIN_DIR/templates/global-claude-md.md" "$CLAUDE_DIR/CLAUDE.md"
+  echo "  ✓ CLAUDE.md installed"
 else
-  echo "-- memory/orchestration.md already exists, skipping"
+  echo "  ⚠ CLAUDE.md already exists, skipping (backup to CLAUDE.md.bak first if you want to update)"
+  echo "    To update: cp $PLUGIN_DIR/templates/global-claude-md.md $CLAUDE_DIR/CLAUDE.md"
 fi
 
-# 4. Scripts — symlink into ~/.claude/scripts/
-mkdir -p "$CLAUDE_DIR/scripts"
-SCRIPTS=(
-  chrome-devtools-mcp-wrapper.sh
-  ios-sim-health.sh
-  ios-sim-start.sh
-  ios-sim-stop.sh
-  vnc_capture.py
-  vnc_interact.py
-)
-for script in "${SCRIPTS[@]}"; do
-  src="$PLUGIN_DIR/scripts/$script"
-  dst="$CLAUDE_DIR/scripts/$script"
-  if [ -f "$src" ]; then
-    # Make executable
-    chmod +x "$src" 2>/dev/null || true
-    ln -sf "$src" "$dst"
-    echo "OK Symlinked script: $script"
-  else
-    echo "!! Script not found in repo (skipping): $script"
-  fi
+# 2. Install hooks
+echo ""
+echo "Installing hooks..."
+for hook in "$PLUGIN_DIR/hooks/"*; do
+  hook_name="$(basename "$hook")"
+  cp "$hook" "$CLAUDE_DIR/hooks/$hook_name"
+  chmod +x "$CLAUDE_DIR/hooks/$hook_name"
+  echo "  ✓ $hook_name"
 done
 
-# 5. Create required directories
-mkdir -p "$CLAUDE_DIR/autopilot-knowledge"
-echo "OK Created autopilot-knowledge dir"
+# 3. Install modes
+echo ""
+echo "Installing modes..."
+for mode in "$PLUGIN_DIR/modes/"*.txt; do
+  mode_name="$(basename "$mode")"
+  cp "$mode" "$CLAUDE_DIR/modes/$mode_name"
+  echo "  ✓ $mode_name"
+done
 
-mkdir -p "$CLAUDE_DIR/memory"
-echo "OK memory dir exists"
+# 4. Install skills
+echo ""
+echo "Installing 16 master skills..."
+for skill_dir in "$PLUGIN_DIR/skills/"*/; do
+  skill_name="$(basename "$skill_dir")"
+  if [ "$skill_name" = "_archive" ]; then continue; fi
+
+  dest="$CLAUDE_DIR/skills/$skill_name"
+  if [ -d "$dest" ]; then
+    echo "  ↺ Updating $skill_name"
+  else
+    echo "  ✓ Installing $skill_name"
+  fi
+  mkdir -p "$dest"
+  cp -r "$skill_dir"* "$dest/" 2>/dev/null || true
+done
+
+# 5. Set default mode to autonomous
+echo ""
+echo "Setting default mode..."
+echo "autonomous" > "$CLAUDE_DIR/mode"
+echo "  ✓ Default mode: autonomous"
 
 echo ""
-echo "=== Manual steps still needed ==="
+echo "=== Setup Complete! ==="
 echo ""
-echo "1. Copy and configure settings.json:"
-echo "   cp $PLUGIN_DIR/templates/settings-template.json $CLAUDE_DIR/settings.json"
-echo "   Then edit and fill in YOUR_*_HERE placeholders"
+echo "Next steps:"
+echo "1. Configure hooks in ~/.claude/settings.json:"
+echo '   "hooks": {'
+echo '     "SessionStart": ["~/.claude/hooks/framework-selector.sh", "~/.claude/hooks/gsd-check-update.js"],'
+echo '     "UserPromptSubmit": ["~/.claude/hooks/mode-inject.sh"],'
+echo '     "PostToolUse": ["~/.claude/hooks/gsd-context-monitor.js"],'
+echo '     "Stop": ["~/.claude/hooks/memory-reminder.js"]'
+echo '   },'
+echo '   "statusLine": "~/.claude/hooks/gsd-statusline.js"'
 echo ""
-echo "2. Copy and configure MCP config:"
-echo "   cp $PLUGIN_DIR/templates/mcp-template.json $CLAUDE_DIR/.mcp.json"
-echo "   Then edit and fill in YOUR_*_HERE API keys"
+echo "2. Install recommended marketplaces:"
+echo "   /plugin marketplace add obra/superpowers-marketplace"
+echo "   /plugin marketplace add anthropics/claude-plugins-official"
 echo ""
-echo "3. Register plugin marketplaces (see SETUP.md)"
-echo ""
-echo "4. Enable plugins in Claude Code (see SETUP.md)"
-echo ""
-echo "5. Get API keys:"
-echo "   - Gemini: https://aistudio.google.com/app/apikey"
-echo "   - GitHub: run 'gh auth login'"
-echo ""
-echo "6. Build any MCP servers that need it (npm install && npm run build)"
-echo ""
-echo "7. See $PLUGIN_DIR/SETUP.md for full instructions"
-echo ""
-echo "=== Install complete ==="
+echo "3. Install MCP servers (optional, for Gemini/LaTeX/iOS):"
+echo "   See plugins/george-setup/mcp-servers/ for instructions"

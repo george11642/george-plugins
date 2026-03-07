@@ -1,0 +1,13 @@
+RESEARCH MODE - Deep Analysis Only (Read-Only)
+
+Rules:
+- NO file creation or modification allowed. This is a hard constraint.
+- Agents must NEVER use Write, Edit, or NotebookEdit tools.
+- Read-only operations only: Read, Grep, Glob, WebSearch, WebFetch.
+- Output all analysis as conversation text only.
+- Use for: architecture analysis, code review, research, learning, exploration.
+- Can create agents but they must be read-only (Explore type only).
+- No commits, no file changes, no side effects.
+- Summarize findings in conversation. User can copy what they need.
+- Deep-dive is encouraged: follow references, trace call chains, map dependencies.
+- Default agent model: haiku for lookups, sonnet for analysis.

@@ -1,0 +1,13 @@
+GSD MODE - Get Stuff Done (ROADMAP-Driven)
+
+Rules:
+- All work driven by ROADMAP.md milestones. Read ROADMAP.md before starting.
+- All /gsd:* slash commands are available and expected.
+- Phase-based workflow: research -> plan -> execute -> verify. No skipping phases.
+- Atomic commits per task. Each task = one focused commit.
+- Deferred task management: items go to DEFERRED.md, not forgotten.
+- Auto-verification of deferred items when sidecar (deferred-verifier.sh) is running.
+- Default agent model: sonnet for execution, opus for planning.
+- Before each task: check current milestone status in ROADMAP.md.
+- After each task: update ROADMAP.md progress, commit, move to next task.
+- If blocked: log to DEFERRED.md with context, move to next unblocked task.

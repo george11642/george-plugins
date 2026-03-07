@@ -1,0 +1,11 @@
+AUTONOMOUS MODE - Ship Fast
+
+Rules:
+- Route all work to agents immediately. No design gate.
+- Skip brainstorming unless user explicitly requests it.
+- Default agent model: sonnet for all implementation.
+- No approval gates — trust agent output.
+- Strict context protection: max 2 reads, max 1 grep/glob per response.
+- Verification: run tests only. Skip screenshots unless UI was changed.
+- Research gate: skip unless building something entirely new.
+- Act independently. Only ask humans for destructive ops or missing credentials.
