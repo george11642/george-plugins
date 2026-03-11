@@ -146,6 +146,14 @@ uv python pin VERSION       # Pin version
 uv pip install/freeze/list  # pip-compatible commands
 ```
 
+## Python Version Upgrades (uv 0.10+)
+
+```bash
+uv python upgrade              # Upgrade Python to latest patch in-place
+uv python install --upgrade    # Install latest patch, create versionless symlink
+# Creates intermediary dir without patch version — venvs transparently upgrade
+```
+
 ## Best Practices
 
 1. Always commit `uv.lock` to version control
@@ -154,3 +162,4 @@ uv pip install/freeze/list  # pip-compatible commands
 4. Pin Python version with `.python-version`
 5. Separate dev dependencies from production
 6. Use workspaces for monorepos
+7. Use `uv python upgrade` for seamless patch-level Python upgrades (0.10+)

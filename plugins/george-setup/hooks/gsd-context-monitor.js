@@ -135,7 +135,11 @@ process.stdin.on('end', () => {
 
     process.stdout.write(JSON.stringify(output));
   } catch (e) {
-    // Silent fail -- never block tool execution
+    // Log but never block tool execution
+    try {
+      fs.appendFileSync(path.join(process.env.HOME, '.claude', 'hook-errors.log'),
+        `[${new Date().toISOString()}] [gsd-context-monitor.js] ${e?.stack || e}\n`);
+    } catch {}
     process.exit(0);
   }
 });

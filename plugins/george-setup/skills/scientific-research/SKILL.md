@@ -1,6 +1,6 @@
 ---
 name: scientific-research
-description: Use for scientific research, academic writing, statistical analysis, grant proposals, or peer review. Triggers on: research paper, manuscript, journal article, LaTeX, BibTeX, publication-quality figure, colorblind palette, Okabe-Ito, heatmap, graphical abstract, p-value, ANOVA, t-test, regression, effect size, power analysis, confidence interval, Bayesian, credible interval, frequentist, assumption checking, HARKing, p-hacking, peer review, rebuttal, response to reviewers, thesis, dissertation, systematic review, meta-analysis, literature review, thematic synthesis, PubMed, arXiv, bioRxiv, Semantic Scholar, PRISMA, CONSORT, STROBE, ARRIVE, TRIPOD, PICO, experimental design, hypothesis, citation management, DOI, NSF, NIH R01, NIH R21, DOE, DARPA, specific aims, broader impacts, grant proposal, resubmission, qualitative research, thematic analysis, grounded theory, interviews, phenomenology, mixed methods, open science, preregistration, registered reports, OSF, reproducibility, FAIR data, DMP, Zenodo, Dryad, causal inference, DAG, propensity score, instrumental variables, difference-in-differences, multilevel model, SEM, CFA, lavaan, lme4, longitudinal analysis, multiple imputation, IRB, informed consent, CBPR, OCAP, decolonial, CRediT, policy brief, press release, video abstract, altmetrics, science communication.
+description: Use for scientific research, academic writing, statistical analysis, grant proposals, peer review, IRB/ethics, causal inference (DAGitty, DAGs), and PRISMA/CONSORT methodology diagrams. Covers manuscripts, LaTeX, BibTeX, p-value, ANOVA, power analysis, effect size, NSF/NIH/DOE grants, systematic reviews, meta-analysis, thematic analysis, preregistration, OSF, FAIR data, propensity scores, instrumental variables, SEM/CFA, lavaan, lme4, qualitative research, science communication.
 license: MIT license
 metadata:
     skill-author: K-Dense Inc.
@@ -175,3 +175,26 @@ These domains work together in research workflows:
 - **Citation management** supports **writing**, **literature review**, and **grants**
 - **Peer review** evaluates manuscripts produced by **writing** and **visualization**
 - **Slides** presents findings from all other domains
+
+## Layer 3 Skills
+
+These atomic skills provide deeper specialization within the scientific research domain:
+
+| Skill | Use when |
+|-------|----------|
+| `writing` | IMRAD manuscripts, cover letters, rebuttals |
+| `visualization` | Publication-quality figures, multi-panel layouts |
+| `schematics` | AI-generated diagrams via Gemini, graphical abstracts |
+| `slides` | Conference talks, PowerPoint/Beamer decks |
+| `literature-review` | Systematic reviews, PRISMA, multi-database search |
+| `hypothesis` | Competing hypotheses, experimental design |
+| `citations` | BibTeX, DOI lookup, bibliography management |
+| `peer-review` | Manuscript evaluation, rebuttal responses |
+| `grants` | NSF, NIH, DOE, DARPA proposals |
+| `statistics` | Test selection, power analysis, APA reporting |
+| `qualitative-research` | Thematic analysis, grounded theory, interviews |
+| `open-science` | Preregistration, OSF, FAIR data, reproducibility |
+| `research-ethics` | IRB, informed consent, CBPR, CRediT |
+| `data-management` | FAIR DMPs, metadata standards, versioning |
+| `advanced-statistics` | Causal inference, DAGs, multilevel models, SEM |
+| `research-communication` | Policy briefs, press releases, video abstracts |

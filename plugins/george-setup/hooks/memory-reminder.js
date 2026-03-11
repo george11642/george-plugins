@@ -64,4 +64,12 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(() => process.exit(0));
+main().catch((err) => {
+  try {
+    const fs2 = require('fs');
+    const path2 = require('path');
+    fs2.appendFileSync(path2.join(process.env.HOME, '.claude', 'hook-errors.log'),
+      `[${new Date().toISOString()}] [memory-reminder.js] ${err?.stack || err}\n`);
+  } catch {}
+  process.exit(0);
+});

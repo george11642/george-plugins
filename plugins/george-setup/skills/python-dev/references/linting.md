@@ -144,3 +144,22 @@ x = unsafe_call()  # noqa: S307 -- justified reason here
 ```
 
 Always add a comment explaining why the suppression is needed.
+
+## Ruff v0.14+ Changes (2026)
+
+- **Default Python version raised from 3.9 to 3.10** — adjust `target-version` if supporting 3.9
+- **T-string support** (Python 3.14) — all string rules updated to handle t-strings
+- New syntax error emitted for t-string implicit concatenation with other string types
+- Update `target-version` to `"py313"` or `"py314"` for latest syntax support
+
+## Python 3.14 Compatibility
+
+```toml
+[tool.ruff]
+target-version = "py314"  # Enable t-string, no-GIL, and latest syntax rules
+```
+
+Key 3.14 features ruff handles:
+- `UP035` flags deprecated `typing` imports (use `collections.abc`, `builtins` directly)
+- T-string (`t"..."`) syntax awareness in all string-related rules
+- Free-threaded build no longer experimental (PEP 779)

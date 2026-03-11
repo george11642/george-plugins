@@ -1,0 +1,82 @@
+[
+  {
+    "query": "Switch me to fast mode so I can ship this feature quickly",
+    "should_trigger": true
+  },
+  {
+    "query": "Turn on readonly mode, I just want to explore the codebase without changing anything",
+    "should_trigger": true
+  },
+  {
+    "query": "Enable TDD gate for this session so I write tests before implementation",
+    "should_trigger": true
+  },
+  {
+    "query": "What's my current autonomy setting? Am I in guided or autonomous mode?",
+    "should_trigger": true
+  },
+  {
+    "query": "I want to be more careful with this refactor — switch to thorough guided mode with plan gate on",
+    "should_trigger": true
+  },
+  {
+    "query": "Disable the brainstorm gate toggle, I already know what I want to build",
+    "should_trigger": true
+  },
+  {
+    "query": "Show me behavior.json so I can see what toggles are currently active",
+    "should_trigger": true
+  },
+  {
+    "query": "Change speed to thorough but keep autonomy as autonomous",
+    "should_trigger": true
+  },
+  {
+    "query": "Turn off screenshot verify toggle, I don't need visual checks right now",
+    "should_trigger": true
+  },
+  {
+    "query": "Set me up in the same mode as the old superpowers mode — thorough, guided, with brainstorm and plan gates",
+    "should_trigger": true
+  },
+  {
+    "query": "How do I configure my Clerk webhook secret in the environment variables?",
+    "should_trigger": false
+  },
+  {
+    "query": "Set up a new cron job in Convex to run the clip coach every Monday",
+    "should_trigger": false
+  },
+  {
+    "query": "Change the git remote to point to my fork instead of upstream",
+    "should_trigger": false
+  },
+  {
+    "query": "Update the ESLint config to add the no-unused-vars rule",
+    "should_trigger": false
+  },
+  {
+    "query": "I need to configure the Modal deployment settings for the transcription worker",
+    "should_trigger": false
+  },
+  {
+    "query": "Read the current Convex schema and tell me what tables exist",
+    "should_trigger": false
+  },
+  {
+    "query": "Set up Sentry error monitoring for the production deployment",
+    "should_trigger": false
+  },
+  {
+    "query": "Change the Vercel environment variables for the staging deployment",
+    "should_trigger": false
+  },
+  {
+    "query": "Configure the TypeScript compiler options to use strict mode",
+    "should_trigger": false
+  },
+  {
+    "query": "Update the Stripe webhook endpoint to handle subscription cancellations",
+    "should_trigger": false
+  }
+]

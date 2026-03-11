@@ -1,6 +1,6 @@
 ---
 name: python-dev
-description: Use when writing Python code, scripts, CLIs, APIs, libraries, or modules. Triggers python, pytest, mypy, pyright, ruff, pydantic, fastapi, flask, django, uv, pip, venv, virtualenv, asyncio, aiohttp, typing, type hints, type checking, dataclass, packaging, pyproject.toml, setuptools, hatchling, profiling, cProfile, debugging, pdb, breakpoint, linting, formatting, black, isort, pdf, pypdf, pdfplumber, reportlab, xlsx, openpyxl, docx, python-docx, pandoc, mcp, fastmcp, model context protocol, OCR, pytesseract, batch processing, file automation, spreadsheet, Word document, Django, FastAPI, Flask, SQLAlchemy, Alembic, Click, Typer, argparse, Pandas, Polars, NumPy, multiprocessing, ThreadPoolExecutor, ProcessPoolExecutor, TaskGroup, concurrent.futures, asyncpg, ORM, migrations, data validation, pandera, Great Expectations, CLI tool, command line interface, subcommands.
+description: "Trigger for ANY task involving Python code, Python tooling, or Python-ecosystem libraries — even when 'Python' isn't explicitly mentioned. If the query references any of these, use this skill: pyproject.toml, hatchling, setuptools, ruff, pyright, mypy, pytest, FastMCP, MCP server, asyncio, TaskGroup, Typer, Click, argparse, dataclass, Pydantic, pathlib, httpx, Polars, Pandas, NumPy, FastAPI, Django, Flask, SQLAlchemy, Alembic, uv, pip, venv, cProfile, py-spy, PDF/Excel/DOCX automation, .py files. Covers writing, debugging, configuring, and reviewing Python. Includes build config, linting config, type checking config, packaging, async concurrency, CLI apps, data scripts, web frameworks, ORM, profiling, and MCP server development. Do NOT use for: ML training/fine-tuning/RAG/vector DBs (use ml-data-engineering), REST/GraphQL API design (use backend-data), test strategy/methodology (use testing-quality), React/TypeScript/frontend (use web-frontend)."
 ---
 
 # Python Development
@@ -166,3 +166,23 @@ Why `breakpoint()` over `import pdb; pdb.set_trace()`: one call, configurable vi
 6. **One formatter, one linter** -- ruff handles both. No flake8+isort+black frankenstack
 7. **Async when I/O-bound** -- asyncio for network/disk, multiprocessing for CPU (see references/async.md)
 8. **Explicit over implicit** -- no star imports, no mutable default args, no bare excepts
+
+## Layer 3 Skills
+
+These atomic skills provide deeper specialization within the Python domain:
+
+| Skill | Use when |
+|-------|----------|
+| `testing` | pytest fixtures, mocking, coverage configuration |
+| `packaging` | pyproject.toml, publishing to PyPI, build systems |
+| `async` | asyncio patterns, event loops, async generators |
+| `performance` | cProfile, py-spy, memory profiling, optimization |
+| `types` | mypy/pyright config, generics, protocols, TypeVar |
+| `linting` | ruff rules, formatting, CI integration |
+| `file-processing` | PDF, Excel, Word automation |
+| `mcp-servers` | FastMCP, tool registration, MCP protocol |
+| `frameworks` | FastAPI, Django, Flask patterns |
+| `database-orm` | SQLAlchemy, async DB, Alembic migrations |
+| `concurrency` | threading, multiprocessing, TaskGroup |
+| `data-processing` | pandas, polars, NumPy, data validation |
+| `cli-development` | Click, Typer, argparse CLI tools |

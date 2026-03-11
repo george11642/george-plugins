@@ -7,6 +7,8 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 
+try { // Top-level error handler
+
 const homeDir = os.homedir();
 const cwd = process.cwd();
 
@@ -79,3 +81,12 @@ const child = spawn(process.execPath, ['-e', `
 });
 
 child.unref();
+
+} catch (err) {
+  try {
+    const fs2 = require('fs');
+    const path2 = require('path');
+    fs2.appendFileSync(path2.join(process.env.HOME, '.claude', 'hook-errors.log'),
+      `[${new Date().toISOString()}] [gsd-check-update.js] ${err?.stack || err}\n`);
+  } catch {}
+}

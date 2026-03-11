@@ -1,20 +1,31 @@
 {
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0",
+    "ENABLE_TOOL_SEARCH": "true"
   },
   "permissions": {
     "allow": [
       "Bash(uv --version:*)"
-    ]
+    ],
+    "defaultMode": "dontAsk"
   },
+  "disabledMcpjsonServers": [
+    "ios-simulator",
+    "stitch",
+    "latex"
+  ],
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$HOME/.claude/hooks/memory-reminder.js\""
+            "command": "node \"/home/george/.claude/hooks/quality-gate.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/screenshot-verify.js\""
           }
         ]
       }
@@ -24,11 +35,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$HOME/.claude/hooks/gsd-check-update.js\""
+            "command": "node \"/home/george/.claude/hooks/gsd-check-update.js\""
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/scripts/patch-chrome-plugin-configs.sh"
+            "command": "/home/george/.claude/scripts/patch-chrome-plugin-configs.sh"
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/boot.js\""
           }
         ]
       }
@@ -38,7 +53,75 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$HOME/.claude/hooks/gsd-context-monitor.js\""
+            "command": "node \"/home/george/.claude/hooks/context-tracker.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/self-heal.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/mid-session-skill-loader.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/budget-breaker.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/sycophancy-check.js\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/router.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/gate-enforcer.js\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/dangerous-cmd-block.js\""
+          },
+          {
+            "type": "command",
+            "command": "/home/george/.claude/hooks/rtk-rewrite.sh"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/readonly-guard.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/convention-check.js\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"/home/george/.claude/hooks/precompact-handoff.js\"",
+            "async": true
           }
         ]
       }
@@ -46,118 +129,49 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "node \"$HOME/.claude/hooks/gsd-statusline.js\""
+    "command": "node \"/home/george/.claude/hooks/statusline.js\""
   },
   "enabledPlugins": {
-    "Notion@claude-plugins-official": false,
-    "accessibility-compliance@claude-code-workflows": false,
-    "agent-orchestration@claude-code-workflows": false,
-    "agent-sdk-dev@claude-plugins-official": true,
-    "api-scaffolding@claude-code-workflows": false,
-    "api-testing-observability@claude-code-workflows": false,
-    "application-performance@claude-code-workflows": false,
-    "asana@claude-plugins-official": false,
-    "atlassian@claude-plugins-official": false,
-    "backend-development@claude-code-workflows": false,
-    "blockchain-web3@claude-code-workflows": false,
-    "business-analytics@claude-code-workflows": false,
-    "c4-architecture@claude-code-workflows": false,
-    "circleback@claude-plugins-official": false,
-    "claude-code-setup@claude-plugins-official": true,
-    "claude-md-management@claude-plugins-official": false,
-    "cloud-infrastructure@claude-code-workflows": false,
-    "code-documentation@claude-code-workflows": false,
-    "code-refactoring@claude-code-workflows": false,
-    "code-review@claude-plugins-official": false,
-    "code-simplifier@claude-plugins-official": true,
-    "codebase-cleanup@claude-code-workflows": false,
-    "commit-commands@claude-plugins-official": true,
-    "conductor@claude-code-workflows": false,
-    "content-marketing@claude-code-workflows": true,
-    "context-management@claude-code-workflows": false,
-    "context7@claude-plugins-official": true,
-    "customer-sales-automation@claude-code-workflows": false,
-    "data-engineering@claude-code-workflows": false,
-    "data-validation-suite@claude-code-workflows": false,
-    "database-design@claude-code-workflows": false,
-    "debugging-toolkit@claude-code-workflows": true,
-    "dependency-management@claude-code-workflows": false,
-    "deployment-strategies@claude-code-workflows": false,
-    "developer-essentials@claude-code-workflows": true,
-    "elements-of-style@superpowers-marketplace": true,
-    "episodic-memory@superpowers-marketplace": false,
-    "explanatory-output-style@claude-plugins-official": false,
-    "feature-dev@claude-plugins-official": true,
-    "figma@claude-plugins-official": true,
-    "firebase@claude-plugins-official": false,
-    "framework-migration@claude-code-workflows": true,
-    "frontend-design@claude-plugins-official": false,
-    "frontend-mobile-development@claude-code-workflows": true,
-    "full-stack-orchestration@claude-code-workflows": false,
-    "functional-programming@claude-code-workflows": false,
-    "git-pr-workflows@claude-code-workflows": false,
-    "github@claude-plugins-official": true,
-    "gitlab@claude-plugins-official": false,
-    "greptile@claude-plugins-official": false,
-    "hookify@claude-plugins-official": true,
-    "hr-legal-compliance@claude-code-workflows": false,
-    "huggingface-skills@claude-plugins-official": false,
-    "incident-response@claude-code-workflows": false,
-    "javascript-typescript@claude-code-workflows": true,
-    "jvm-languages@claude-code-workflows": false,
-    "kubernetes-operations@claude-code-workflows": false,
-    "laravel-boost@claude-plugins-official": false,
-    "learning-output-style@claude-plugins-official": false,
-    "linear@claude-plugins-official": false,
-    "llm-application-dev@claude-code-workflows": false,
-    "lua-lsp@claude-plugins-official": false,
-    "machine-learning-ops@claude-code-workflows": false,
-    "multi-platform-apps@claude-code-workflows": false,
-    "observability-monitoring@claude-code-workflows": false,
-    "payment-processing@claude-code-workflows": false,
-    "performance-testing-review@claude-code-workflows": false,
-    "pinecone@claude-plugins-official": false,
-    "playwright@claude-plugins-official": true,
-    "plugin-dev@claude-plugins-official": true,
-    "pr-review-toolkit@claude-plugins-official": true,
-    "pyright-lsp@claude-plugins-official": true,
-    "python-development@claude-code-workflows": true,
-    "quantitative-trading@claude-code-workflows": false,
-    "security-guidance@claude-plugins-official": true,
-    "sentry@claude-plugins-official": true,
-    "serena@claude-plugins-official": false,
-    "shell-scripting@claude-code-workflows": true,
-    "slack@claude-plugins-official": false,
-    "startup-business-analyst@claude-code-workflows": false,
-    "stripe@claude-plugins-official": true,
-    "supabase@claude-plugins-official": true,
     "superpowers-chrome@superpowers-marketplace": true,
-    "superpowers-developing-for-claude-code@superpowers-marketplace": false,
-    "superpowers-lab@superpowers-marketplace": true,
-    "superpowers@superpowers-marketplace": true,
-    "systems-programming@claude-code-workflows": false,
-    "tdd-workflows@claude-code-workflows": false,
-    "team-collaboration@claude-code-workflows": false,
-    "typescript-lsp@claude-plugins-official": true,
-    "ui-design@claude-code-workflows": true,
-    "unit-testing@claude-code-workflows": false,
-    "vercel@claude-plugins-official": true,
-    "web-scripting@claude-code-workflows": false,
-    "ralph-marketer-v2@george-local": false,
-    "ralph-marketer-v2@george-plugins": false,
-    "claude-mem@thedotmack": false,
     "ralph-gsd@george-plugins": true,
-    "autopilot@george-plugins": true,
-    "posthog@claude-plugins-official": true,
-    "playground@claude-plugins-official": false,
-    "claude-session-driver@superpowers-marketplace": true
+    "typescript-lsp@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true
   },
   "skipDangerousModePermissionPrompt": true,
+  "disabledPlugins": {
+    "context7@claude-plugins-official": "not part of the minimal default set",
+    "superpowers@superpowers-marketplace": "absorbed into process overlays (brainstorming, TDD, etc.)",
+    "claude-session-driver@superpowers-marketplace": "replaced by orchestrator skill",
+    "claude-code-setup@claude-plugins-official": "one-time use, not needed always",
+    "episodic-memory@superpowers-marketplace": "replaced by progressive memory in behavior.json",
+    "agent-sdk-dev@claude-plugins-official": "not essential",
+    "code-simplifier@claude-plugins-official": "absorbed into domain skills",
+    "content-marketing@claude-code-workflows": "not essential",
+    "debugging-toolkit@claude-code-workflows": "absorbed into domain skills",
+    "developer-essentials@claude-code-workflows": "absorbed into domain skills",
+    "framework-migration@claude-code-workflows": "not essential",
+    "frontend-mobile-development@claude-code-workflows": "absorbed into domain skills",
+    "javascript-typescript@claude-code-workflows": "absorbed into domain skills",
+    "python-development@claude-code-workflows": "absorbed into domain skills",
+    "security-guidance@claude-plugins-official": "absorbed into domain skills",
+    "shell-scripting@claude-code-workflows": "absorbed into domain skills",
+    "hookify@claude-plugins-official": "extra command surface, not part of the minimal default set",
+    "commit-commands@claude-plugins-official": "extra git command surface, not part of the minimal default set",
+    "plugin-dev@claude-plugins-official": "plugin authoring helpers are not part of the daily default set",
+    "sentry@claude-plugins-official": "enable only when needed for incident work",
+    "stripe@claude-plugins-official": "enable only when needed for billing work",
+    "posthog@claude-plugins-official": "enable only when needed for analytics work",
+    "figma@claude-plugins-official": "enable only when needed for design work",
+    "claude-md-management@claude-plugins-official": "extra authoring helpers, not part of the minimal default set",
+    "github@claude-plugins-official": "gh cli already covers day-to-day GitHub work",
+    "supabase@claude-plugins-official": "MCP handles this directly",
+    "ui-design@claude-code-workflows": "absorbed into domain skills",
+    "vercel@claude-plugins-official": "not essential for daily use"
+  },
   "mcpServers": {
     "clerk": {
       "type": "http",
       "url": "https://mcp.clerk.com/mcp"
     }
-  },
-  "_README": "Copy this to ~/.claude/settings.json. Replace all YOUR_*_HERE placeholders with real values. See SETUP.md for instructions."
+  }
 }

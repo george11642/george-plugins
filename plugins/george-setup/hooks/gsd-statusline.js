@@ -110,6 +110,10 @@ process.stdin.on('end', () => {
       process.stdout.write(`${gsdUpdate}\x1b[2m${model}\x1b[0m │ \x1b[2m${dirname}\x1b[0m${ctx}`);
     }
   } catch (e) {
-    // Silent fail - don't break statusline on parse errors
+    // Log but don't break statusline on parse errors
+    try {
+      fs.appendFileSync(path.join(process.env.HOME, '.claude', 'hook-errors.log'),
+        `[${new Date().toISOString()}] [gsd-statusline.js] ${e?.stack || e}\n`);
+    } catch {}
   }
 });

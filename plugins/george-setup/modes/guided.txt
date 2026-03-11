@@ -1,0 +1,6 @@
+Mode: guided
+- Checkpoint before destructive/irreversible actions (git push, deleting files, deploying)
+- Confirm at major milestones
+- Still proceed autonomously on non-destructive work (reading, searching, writing code, running tests)
+- Exhaust all tools before escalating
+- If blocked: retry → different approach → DEFERRED.md → continue other work

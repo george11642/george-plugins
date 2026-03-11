@@ -1,0 +1,67 @@
+Split: 17 train, 6 test (holdout=0.3)
+
+============================================================
+Iteration 1/5
+Description: Use when writing Python code, scripts, CLIs, APIs, libraries, or modules. Triggers: python, pytest, mypy, pyright, ruff, pydantic, fastapi, flask, django, uv, pip, venv, virtualenv, asyncio, aiohttp, typing, type hints, type checking, dataclass, packaging, pyproject.toml, setuptools, hatchling, profiling, cProfile, debugging, pdb, breakpoint, linting, formatting, black, isort.
+============================================================
+Train: 21/51 correct, precision=100% recall=0% accuracy=41% (273.3s)
+  [FAIL] rate=0/3 expected=True: Add error handling and logging to this Python script
+  [FAIL] rate=0/3 expected=True: Write a Python context manager for database connections
+  [FAIL] rate=0/3 expected=True: Write an async Python function that fetches multiple URLs co
+  [FAIL] rate=0/3 expected=True: Set up a virtual environment and install dependencies from r
+  [FAIL] rate=0/3 expected=True: Refactor this Python class to use dataclasses instead of pla
+  [FAIL] rate=0/3 expected=True: Fix the ruff linting errors in my Python project
+  [FAIL] rate=0/3 expected=True: Set up a pydantic model for user registration validation
+  [FAIL] rate=0/3 expected=True: Write a Python script that reads a CSV and outputs summary s
+  [FAIL] rate=0/3 expected=True: Add type hints to this Python function and run mypy
+  [FAIL] rate=0/3 expected=True: Create a Python decorator that retries failed function calls
+  [PASS] rate=0/3 expected=False: Create a Dockerfile for my Python Flask application
+  [PASS] rate=0/3 expected=False: Set up a PyTorch training loop for my neural network
+  [PASS] rate=0/3 expected=False: Design the database schema for a Python web app
+  [PASS] rate=0/3 expected=False: Deploy my Python app to AWS Lambda with Terraform
+  [PASS] rate=0/3 expected=False: Build a pandas pipeline to clean and transform the sales dat
+  [PASS] rate=0/3 expected=False: Build a RAG pipeline using LangChain and embeddings
+  [PASS] rate=0/3 expected=False: Train a random forest classifier on this dataset using sciki
+Test : 9/18 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: Write pytest fixtures for my database service class
+  [FAIL] rate=0/3 expected=True: Create a pyproject.toml and set up packaging for my library
+  [FAIL] rate=0/3 expected=True: Create a CLI tool with click that processes log files
+  [PASS] rate=0/3 expected=False: Write a bash script that backs up my Python project
+  [PASS] rate=0/3 expected=False: Write a FastAPI endpoint that returns user profiles
+  [PASS] rate=0/3 expected=False: Create a matplotlib bar chart showing monthly revenue
+
+Improving description...
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/george/.agents/skills/skill-creator/scripts/run_loop.py", line 332, in <module>
+    main()
+  File "/home/george/.agents/skills/skill-creator/scripts/run_loop.py", line 297, in main
+    output = run_loop(
+             ^^^^^^^^^
+  File "/home/george/.agents/skills/skill-creator/scripts/run_loop.py", line 202, in run_loop
+    new_description = improve_description(
+                      ^^^^^^^^^^^^^^^^^^^^
+  File "/home/george/.agents/skills/skill-creator/scripts/improve_description.py", line 114, in improve_description
+    response = client.messages.create(
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/george/.local/share/mise/installs/python/3.12.12/lib/python3.12/site-packages/anthropic/_utils/_utils.py", line 282, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/george/.local/share/mise/installs/python/3.12.12/lib/python3.12/site-packages/anthropic/resources/messages/messages.py", line 996, in create
+    return self._post(
+           ^^^^^^^^^^^
+  File "/home/george/.local/share/mise/installs/python/3.12.12/lib/python3.12/site-packages/anthropic/_base_client.py", line 1364, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/george/.local/share/mise/installs/python/3.12.12/lib/python3.12/site-packages/anthropic/_base_client.py", line 1058, in request
+    request = self._build_request(options, retries_taken=retries_taken)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/george/.local/share/mise/installs/python/3.12.12/lib/python3.12/site-packages/anthropic/_base_client.py", line 521, in _build_request
+    headers = self._build_headers(options, retries_taken=retries_taken)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/george/.local/share/mise/installs/python/3.12.12/lib/python3.12/site-packages/anthropic/_base_client.py", line 451, in _build_headers
+    self._validate_headers(headers_dict, custom_headers)
+  File "/home/george/.local/share/mise/installs/python/3.12.12/lib/python3.12/site-packages/anthropic/_client.py", line 196, in _validate_headers
+    raise TypeError(
+TypeError: "Could not resolve authentication method. Expected either api_key or auth_token to be set. Or for one of the `X-Api-Key` or `Authorization` headers to be explicitly omitted"

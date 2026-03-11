@@ -1,0 +1,10 @@
+{
+  "autonomy": "autonomous",
+  "toggles": {
+    "readonly": false
+  },
+  "active_domain": null,
+  "session_start": "2026-03-11T21:36:45.934Z",
+  "last_heartbeat": null,
+  "tool_call_count": 0
+}
