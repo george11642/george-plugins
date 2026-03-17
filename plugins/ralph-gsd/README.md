@@ -37,7 +37,7 @@ Or with options:
 
 ### 3. Review deferred items
 
-After completion, check `.planning/DEFERRED.md` for any items that need human review.
+After completion, `.planning/DEFERRED.md` items are processed **autonomously** by `process_deferred_items()` using browser agents, fix agents, and code agents — no human action needed.
 
 ## Options
 
@@ -57,7 +57,7 @@ After completion, check `.planning/DEFERRED.md` for any items that need human re
 4. **Dispatches independent phases in parallel** (up to `--max-parallel`)
 5. Falls back to sequential execution when only one phase is ready
 6. Loops until milestone complete, deadlock, or max iterations reached
-7. Logs deferred checkpoints to `DEFERRED.md` for later review
+7. Logs deferred checkpoints to `DEFERRED.md`; these are processed autonomously by `process_deferred_items()` at milestone completion
 
 ## Parallel Execution
 
@@ -78,7 +78,7 @@ Parallel phases write to different `phases/NN-*/` directories. Low risk on STATE
 ## Files Created
 
 - `.planning/ralph-gsd.log` - Execution log
-- `.planning/DEFERRED.md` - Items needing human review
+- `.planning/DEFERRED.md` - Items processed autonomously by `process_deferred_items()` (browser/fix/code agents — no human needed)
 - `.planning/ralph-gsd-parallel/` - Per-phase log files (during parallel execution)
 
 ## Safety Features

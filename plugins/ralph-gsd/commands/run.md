@@ -65,7 +65,7 @@ Dry run to preview dependency graph:
 
 - The script runs in the foreground and spawns new Claude sessions
 - Parallel phases output to per-phase log files in `.planning/ralph-gsd-parallel/`
-- Checkpoints are logged to `.planning/DEFERRED.md` for later review
+- Checkpoints are logged to `.planning/DEFERRED.md` and processed autonomously by `process_deferred_items()` — no human review needed
 - Execution log saved to `.planning/ralph-gsd.log`
 - Script will stop on errors, deadlock, or after max iterations
 

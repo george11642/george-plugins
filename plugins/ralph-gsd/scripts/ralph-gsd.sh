@@ -646,9 +646,9 @@ init_deferred() {
 
     if [[ ! -f "$deferred_file" ]]; then
         cat > "$deferred_file" << 'EOF'
-# Deferred Human Involvement Items
+# Deferred Items
 
-Items logged by Ralph-GSD that need human review after milestone completion.
+Items logged by Ralph-GSD and processed autonomously after milestone completion. No human involvement required — all items are resolved by `process_deferred_items()` using browser agents, fix agents, and code agents.
 
 ---
 
