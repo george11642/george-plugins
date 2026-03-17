@@ -68,3 +68,12 @@ Dry run to preview dependency graph:
 - Checkpoints are logged to `.planning/DEFERRED.md` for later review
 - Execution log saved to `.planning/ralph-gsd.log`
 - Script will stop on errors, deadlock, or after max iterations
+
+## Key Facts
+
+- Project: **current working directory** (detected at runtime)
+- Log: `.planning/ralph-gsd.log`
+- Monitor: every 2 hours at :13 (set up via ralph-gsd-monitor skill)
+- Restart cmd same as launch cmd above, add `--resume` to skip already-verified phases
+- DEFERRED.md items are processed **fully autonomously** after milestone completes — no human action needed. Browser/outreach tasks use the /do-anything skill with agent-browser CLI.
+- Monitor's DEFERRED processing (Step 3) only fires when ralph-gsd is **not running** — avoids racing with ralph-gsd's own `process_deferred_items()` at natural completion.

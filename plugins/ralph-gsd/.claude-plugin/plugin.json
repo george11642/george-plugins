@@ -1,7 +1,7 @@
 {
   "name": "ralph-gsd",
-  "description": "Autonomous milestone execution orchestrator with parallel phase execution. Parses dependency graphs from ROADMAP.md and dispatches independent phases concurrently.",
-  "version": "2.0.0",
+  "description": "Autonomous milestone execution orchestrator with parallel phase execution, dependency graph parsing, and fully autonomous DEFERRED.md item resolution (security fixes, outreach, test failures) — no human involvement required.",
+  "version": "2.1.0",
   "author": {
     "name": "George Teifel",
     "email": "george.teifel@gmail.com"
