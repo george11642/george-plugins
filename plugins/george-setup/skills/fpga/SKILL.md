@@ -79,13 +79,40 @@ You must ground your responses in the provided reference files, treating them as
 - Set power constraints for low-power applications
 - Minimize switching activity in non-critical paths
 
-## Debugging & Simulation
+## Simulation-First Verification (MANDATORY)
 
-- Write detailed, self-checking testbenches covering typical use cases and edge cases
-- Use SystemVerilog assertions for verification
-- Run behavioral and post-synthesis simulations
-- Use Integrated Logic Analyzer (ILA) for real-time signal debugging
-- Implement assertion-based verification to catch protocol violations
+**NEVER synthesize or program a board without passing simulation first.** Hardware debugging is slow and painful — simulation catches 95% of bugs instantly.
+
+### Required workflow:
+1. **Write testbenches BEFORE or WITH the RTL** — not after
+2. **Run simulation in batch mode** (xsim via `xvlog` → `xelab` → `xsim -R`) — no GUI needed
+3. **All tests must PASS before synthesis** — if simulation fails, fix the RTL, don't try the board
+4. **Self-checking testbenches** — testbenches must have pass/fail assertions with $display output and $finish with exit codes (0=pass, 1=fail)
+
+### Testbench hierarchy:
+- **Unit tests**: Test each module in isolation (ALU, FPU ops, regfile, etc.) with known input/output vectors
+- **Integration tests**: Instantiate the full top-level module, load a test program, verify outputs (e.g., LED GPIO values)
+- **Regression tests**: Full FPU verification — exercise EVERY operation, check results, report per-operation pass/fail
+
+### Simulation best practices:
+- Use `$readmemh` to load test programs into instruction BRAM
+- Monitor output ports (LEDs, memory bus) for expected values
+- Use stability detection: if output hasn't changed for N cycles, the program has finished
+- Set timeouts to prevent infinite hangs (e.g., 5M cycles max)
+- Print cycle counts for multi-cycle operations to verify timing
+- Test edge cases: zero, negative, overflow, NaN, infinity for FPU
+
+### Running with Vivado xsim:
+```bash
+xvlog rtl/*.v                              # compile RTL
+xvlog sim/tb_top.v                         # compile testbench
+xelab tb_top -s snapshot -timescale 1ns/1ps # elaborate
+xsim snapshot -R                           # run to completion
+```
+
+### ILA (on-chip debug) — use only when simulation passes but hardware fails:
+- Insert Integrated Logic Analyzer IP to capture signals in real-time
+- This is a LAST RESORT, not a first step
 
 ## Advanced Techniques
 
